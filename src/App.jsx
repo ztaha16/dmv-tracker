@@ -1,5 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
+import { MapContainer, TileLayer, Marker, Popup } from "react-leaflet";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
 
 const supabase = createClient(
   "https://hdnenizzfrzhwmpcvtei.supabase.co",
@@ -15,21 +18,28 @@ const PALETTE = {
 };
 
 const EMPTY_CONFIG = { categories: [], locations: [], costTiers: [] };
-
 function gid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
 
-/* ── Database helpers ── */
+// Custom pink map pin
+const pinIcon = L.divIcon({
+  className: "custom-pin",
+  html: `<div style="background:${PALETTE.accent};width:24px;height:24px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.3)"></div>`,
+  iconSize: [24, 24],
+  iconAnchor: [12, 24],
+  popupAnchor: [0, -24]
+});
 
+/* ── Database helpers ── */
 async function dbLoadPlaces() {
   const { data, error } = await supabase.from("places").select("*").order("name");
   if (error) { console.error(error); return []; }
   return data.map(r => ({
     id: r.id, name: r.name, categories: r.categories || [], cost: r.cost || "",
     locations: r.locations || [], website: r.website || "", imageUrl: r.image_url || "",
-    rating: r.rating || 0, visited: r.visited || false, notes: r.notes || ""
+    rating: r.rating || 0, visited: r.visited || false, notes: r.notes || "",
+    lat: r.lat ?? null, lng: r.lng ?? null, address: r.address || ""
   }));
 }
-
 async function dbLoadConfig() {
   const { data, error } = await supabase.from("config").select("*");
   if (error) { console.error(error); return EMPTY_CONFIG; }
@@ -37,34 +47,30 @@ async function dbLoadConfig() {
   data.forEach(r => { if (r.key in config) config[r.key] = r.value; });
   return config;
 }
-
 async function dbUpsertPlace(place) {
   const row = {
     id: place.id, name: place.name, categories: place.categories, cost: place.cost,
     locations: place.locations, website: place.website, image_url: place.imageUrl,
-    rating: place.rating, visited: place.visited, notes: place.notes
+    rating: place.rating, visited: place.visited, notes: place.notes,
+    lat: place.lat, lng: place.lng, address: place.address
   };
   const { error } = await supabase.from("places").upsert(row);
   if (error) console.error(error);
 }
-
 async function dbDeletePlace(id) {
   const { error } = await supabase.from("places").delete().eq("id", id);
   if (error) console.error(error);
 }
-
 async function dbSaveConfig(key, value) {
   const { error } = await supabase.from("config").upsert({ key, value });
   if (error) console.error(error);
 }
-
 async function dbClearAllPlaces() {
   const { error } = await supabase.from("places").delete().neq("id", "");
   if (error) console.error(error);
 }
 
 /* ── Shared Components ── */
-
 function StarRating({ rating, onRate, size = 18, interactive = false }) {
   return (
     <div style={{ display: "flex", gap: 2, cursor: interactive ? "pointer" : "default" }}>
@@ -131,8 +137,62 @@ function MultiSelect({ options, selected, onChange, placeholder }) {
   );
 }
 
-/* ── Category Detail Modal ── */
+/* ── Address Search (Nominatim) ── */
+function AddressSearch({ value, onSelect }) {
+  const [query, setQuery] = useState(value || "");
+  const [results, setResults] = useState([]);
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const timer = useRef(null);
+  const ref = useRef(null);
 
+  useEffect(() => {
+    const h = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", h); return () => document.removeEventListener("mousedown", h);
+  }, []);
+
+  const doSearch = (q) => {
+    if (timer.current) clearTimeout(timer.current);
+    if (q.length < 3) { setResults([]); return; }
+    timer.current = setTimeout(async () => {
+      setLoading(true);
+      try {
+        const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&q=${encodeURIComponent(q)}&limit=5&countrycodes=us`);        const data = await res.json();
+        setResults(data);
+        setOpen(true);
+      } catch { setResults([]); }
+      setLoading(false);
+    }, 400);
+  };
+
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <input type="text" value={query}
+        onChange={e => { setQuery(e.target.value); doSearch(e.target.value); }}
+        placeholder="Search restaurant or address..."
+        style={{ width: "100%", border: `1.5px solid ${PALETTE.border}`, borderRadius: 10, padding: "9px 12px", fontSize: 14, fontFamily: "'DM Sans',sans-serif", color: PALETTE.text, outline: "none", background: "#fff", boxSizing: "border-box" }} />
+      {loading && <div style={{ fontSize: 11, color: PALETTE.textLight, marginTop: 4 }}>searching...</div>}
+      {open && results.length > 0 && (
+        <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "#fff", border: `1.5px solid ${PALETTE.border}`, borderRadius: 10, marginTop: 4, maxHeight: 220, overflowY: "auto", zIndex: 1001, boxShadow: "0 8px 24px rgba(44,37,32,.12)" }}>
+          {results.map((r, i) => (
+            <div key={i} onClick={() => {
+              const town = (r.address?.city || r.address?.town || r.address?.village || r.address?.suburb || "").toLowerCase();
+              onSelect({ lat: parseFloat(r.lat), lng: parseFloat(r.lon), address: r.display_name, town });
+              setQuery(r.display_name);
+              setOpen(false);
+            }} style={{ padding: "8px 12px", fontSize: 12, fontFamily: "'DM Sans',sans-serif", cursor: "pointer", color: PALETTE.text, borderBottom: `1px solid ${PALETTE.border}`, lineHeight: 1.4 }}
+              onMouseEnter={e => e.currentTarget.style.background = PALETTE.accentSoft}
+              onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+              📍 {r.display_name}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── Category Detail Modal ── */
 function CategoryModal({ category, places, onClose }) {
   const catPlaces = places.filter(p => p.categories?.includes(category));
   const visited = catPlaces.filter(p => p.visited);
@@ -198,7 +258,6 @@ function CategoryModal({ category, places, onClose }) {
 }
 
 /* ── Settings List Manager ── */
-
 function ListManager({ title, items, onUpdate, icon }) {
   const [newItem, setNewItem] = useState("");
   const [editIdx, setEditIdx] = useState(null);
@@ -250,10 +309,9 @@ function ListManager({ title, items, onUpdate, icon }) {
 }
 
 /* ── Place Modal ── */
-
 function PlaceModal({ place, config, onSave, onClose, onDelete }) {
   const isEdit = !!place?.id;
-  const [form, setForm] = useState(place || { name: "", categories: [], cost: "", locations: [], website: "", imageUrl: "", rating: 0, visited: false, notes: "" });
+  const [form, setForm] = useState(place || { name: "", categories: [], cost: "", locations: [], website: "", imageUrl: "", rating: 0, visited: false, notes: "", lat: null, lng: null, address: "" });
   const update = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const label = { fontSize: 12, fontWeight: 600, color: PALETTE.textMid, marginBottom: 5, display: "block", fontFamily: "'DM Sans',sans-serif", textTransform: "uppercase", letterSpacing: ".5px" };
   const input = { width: "100%", border: `1.5px solid ${PALETTE.border}`, borderRadius: 10, padding: "9px 12px", fontSize: 14, fontFamily: "'DM Sans',sans-serif", color: PALETTE.text, outline: "none", background: "#fff", boxSizing: "border-box" };
@@ -266,6 +324,9 @@ function PlaceModal({ place, config, onSave, onClose, onDelete }) {
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <div><label style={label}>Name *</label><input style={input} value={form.name} onChange={e => update("name", e.target.value)} placeholder="e.g. Dave's Hot Chicken" /></div>
+          <div>
+            <label style={label}>Find on map {form.lat && <span style={{ fontWeight: 400, textTransform: "none", color: PALETTE.visited }}>✓ pinned</span>}</label>
+              <AddressSearch value={form.address} onSelect={({ lat, lng, address, town }) => setForm(f => ({ ...f, lat, lng, address, locations: town && !f.locations.includes(town) ? [...f.locations, town] : f.locations }))} />          </div>
           <div>
             <label style={label}>Categories {config.categories.length === 0 && <span style={{ fontWeight: 400, textTransform: "none", color: PALETTE.textLight }}>(add in Settings)</span>}</label>
             <MultiSelect options={config.categories} selected={form.categories} onChange={v => update("categories", v)} placeholder="Select categories..." />
@@ -308,7 +369,6 @@ function PlaceModal({ place, config, onSave, onClose, onDelete }) {
 }
 
 /* ── Place Card ── */
-
 function PlaceCard({ place, onClick }) {
   const [hov, setHov] = useState(false);
   return (
@@ -349,8 +409,43 @@ function PlaceCard({ place, onClick }) {
   );
 }
 
-/* ── Main App ── */
+/* ── Map View ── */
+function MapView({ places, onClick }) {
+  const pinned = places.filter(p => p.lat && p.lng);
+  const center = pinned.length > 0 ? [pinned[0].lat, pinned[0].lng] : [38.8816, -77.0910]; // DC area default
+  return (
+    <div style={{ borderRadius: 14, overflow: "hidden", border: `1px solid ${PALETTE.border}`, height: 560 }}>
+      {pinned.length === 0 ? (
+        <div style={{ height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: PALETTE.accentSoft, color: PALETTE.textMid }}>
+          <div style={{ fontSize: 40, marginBottom: 8 }}>🗺️</div>
+          <div style={{ fontSize: 14, fontFamily: "'DM Sans',sans-serif" }}>No pinned places yet. Use "Find on map" when adding a place!</div>
+        </div>
+      ) : (
+        <MapContainer center={center} zoom={11} style={{ height: "100%", width: "100%" }}>
+          <TileLayer
+            attribution='&copy; OpenStreetMap'
+            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          />
+          {pinned.map(p => (
+            <Marker key={p.id} position={[p.lat, p.lng]} icon={pinIcon}>
+              <Popup>
+                <div style={{ fontFamily: "'DM Sans',sans-serif", minWidth: 140 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14, color: PALETTE.text, marginBottom: 4 }}>{p.name}</div>
+                  {p.categories?.length > 0 && <div style={{ fontSize: 11, color: PALETTE.tagText, marginBottom: 4 }}>{p.categories.join(", ")}</div>}
+                  {p.rating > 0 && <div style={{ color: PALETTE.star, fontSize: 13 }}>{"★".repeat(p.rating)}</div>}
+                  {p.cost && <div style={{ fontSize: 12, color: PALETTE.textMid, marginTop: 2 }}>{p.cost}</div>}
+                  <button onClick={() => onClick(p)} style={{ marginTop: 6, padding: "4px 10px", borderRadius: 6, border: "none", background: PALETTE.accent, color: "#fff", fontSize: 11, cursor: "pointer", fontFamily: "'DM Sans',sans-serif" }}>edit</button>
+                </div>
+              </Popup>
+            </Marker>
+          ))}
+        </MapContainer>
+      )}
+    </div>
+  );
+}
 
+/* ── Main App ── */
 export default function App() {
   const [places, setPlaces] = useState([]);
   const [config, setConfig] = useState(EMPTY_CONFIG);
@@ -366,9 +461,7 @@ export default function App() {
   useEffect(() => {
     (async () => {
       const [p, c] = await Promise.all([dbLoadPlaces(), dbLoadConfig()]);
-      setPlaces(p);
-      setConfig(c);
-      setLoading(false);
+      setPlaces(p); setConfig(c); setLoading(false);
     })();
   }, []);
 
@@ -378,22 +471,9 @@ export default function App() {
     setPlaces(exists ? places.map(p => p.id === place.id ? place : p) : [...places, place]);
     setPlaceModal(null);
   };
-
-  const handleDeletePlace = async (pid) => {
-    await dbDeletePlace(pid);
-    setPlaces(places.filter(p => p.id !== pid));
-    setPlaceModal(null);
-  };
-
-  const handleConfigUpdate = async (key, value, fullConfig) => {
-    await dbSaveConfig(key, value);
-    setConfig(fullConfig);
-  };
-
-  const handleClearAll = async () => {
-    await dbClearAllPlaces();
-    setPlaces([]);
-  };
+  const handleDeletePlace = async (pid) => { await dbDeletePlace(pid); setPlaces(places.filter(p => p.id !== pid)); setPlaceModal(null); };
+  const handleConfigUpdate = async (key, value, fullConfig) => { await dbSaveConfig(key, value); setConfig(fullConfig); };
+  const handleClearAll = async () => { await dbClearAllPlaces(); setPlaces([]); };
 
   const toggleCat = c => setActiveCats(prev => prev.includes(c) ? prev.filter(x => x !== c) : [...prev, c]);
   const toggleLoc = l => setActiveLocs(prev => prev.includes(l) ? prev.filter(x => x !== l) : [...prev, l]);
@@ -438,7 +518,7 @@ export default function App() {
         <div style={{ maxWidth: 800, margin: "0 auto", padding: 28 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 24 }}>
             <button onClick={() => setPage("main")} style={{ background: "transparent", border: `1.5px solid ${PALETTE.border}`, borderRadius: 10, padding: "8px 16px", cursor: "pointer", fontSize: 13, fontFamily: "'DM Sans',sans-serif", color: PALETTE.textMid }}>← Back</button>
-            <h1 style={{ fontFamily: "'Playfair Display',serif", fontSize: 28, color: PALETTE.text, margin: 0 }}>⚙️</h1>
+            <h1 style={{ fontFamily: "'Playfair Display',serif", fontSize: 28, color: PALETTE.text, margin: 0 }}>⚙️ Settings</h1>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
             <ListManager title="Categories" icon="📂" items={config.categories} onUpdate={cats => handleConfigUpdate("categories", cats, { ...config, categories: cats })} />
@@ -467,8 +547,8 @@ export default function App() {
             <p style={{ color: PALETTE.textLight, fontSize: 13, margin: 0 }}>{places.length} places · {places.filter(p => p.visited).length} visited</p>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={() => setPage("settings")} style={{ padding: "9px 16px", borderRadius: 10, border: `1.5px solid ${PALETTE.border}`, background: "transparent", color: PALETTE.textMid, fontFamily: "'DM Sans',sans-serif", fontSize: 13, cursor: "pointer" }}>⚙️</button>
-            <button onClick={() => setPlaceModal({})} style={{ padding: "9px 20px", borderRadius: 10, border: "none", background: PALETTE.accent, color: "#fff", fontFamily: "'DM Sans',sans-serif", fontSize: 13, fontWeight: 600, cursor: "pointer", boxShadow: "0 4px 12px rgba(196,149,106,.15)" }}>+ Add Place</button>
+            <button onClick={() => setPage("settings")} style={{ padding: "9px 16px", borderRadius: 10, border: `1.5px solid ${PALETTE.border}`, background: "transparent", color: PALETTE.textMid, fontFamily: "'DM Sans',sans-serif", fontSize: 13, cursor: "pointer" }}>⚙️ Settings</button>
+            <button onClick={() => setPlaceModal({})} style={{ padding: "9px 20px", borderRadius: 10, border: "none", background: PALETTE.accent, color: "#fff", fontFamily: "'DM Sans',sans-serif", fontSize: 13, fontWeight: 600, cursor: "pointer", boxShadow: "0 4px 12px rgba(212,130,154,.25)" }}>+ Add Place</button>
           </div>
         </div>
         {config.categories.length > 0 && (
@@ -478,9 +558,6 @@ export default function App() {
               {config.categories.map(cat => (
                 <Chip key={cat} label={`🍽 ${cat}`} active={activeCats.includes(cat)} onClick={() => setCatModal(cat)} />
               ))}
-              {activeCats.length > 0 && (
-                <span onClick={() => setActiveCats([])} style={{ padding: "5px 12px", fontSize: 12, color: PALETTE.danger, cursor: "pointer", fontFamily: "'DM Sans',sans-serif", alignSelf: "center" }}>clear</span>
-              )}
             </div>
           </div>
         )}
@@ -501,34 +578,39 @@ export default function App() {
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                   <div style={{ display: "flex", gap: 4, background: PALETTE.card, borderRadius: 10, border: `1.5px solid ${PALETTE.border}`, padding: 3 }}>
                     {tabBtn("⊞ overview", "overview")}
-                    {tabBtn("★ view by rating", "view by rating")}
-                    {tabBtn("💰 view by cost", "view by cost")}
+                    {tabBtn("★ rating", "view by rating")}
+                    {tabBtn("💰 cost", "view by cost")}
                     {tabBtn("📍 want to visit", "want to visit")}
+                    {tabBtn("🗺️ map", "map")}
                   </div>
-                  <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍 search..."
-                    style={{ border: `1.5px solid ${PALETTE.border}`, borderRadius: 10, padding: "6px 12px", fontSize: 12, fontFamily: "'DM Sans',sans-serif", color: PALETTE.text, outline: "none", background: "#fff", width: 160 }} />
+                  {viewTab !== "map" && <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍 search..."
+                    style={{ border: `1.5px solid ${PALETTE.border}`, borderRadius: 10, padding: "6px 12px", fontSize: 12, fontFamily: "'DM Sans',sans-serif", color: PALETTE.text, outline: "none", background: "#fff", width: 160 }} />}
                 </div>
               </div>
-              {(activeCats.length > 0 || activeLocs.length > 0) && (
+              {(activeCats.length > 0 || activeLocs.length > 0) && viewTab !== "map" && (
                 <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
                   <span style={{ fontSize: 12, color: PALETTE.textLight }}>Filtering:</span>
                   {activeCats.map(c => <Chip key={c} label={c} small active onRemove={() => toggleCat(c)} />)}
                   {activeLocs.map(l => <Chip key={l} label={`📍 ${l}`} small active onRemove={() => toggleLoc(l)} />)}
                 </div>
               )}
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 12 }}>
-                {filtered.map(p => <PlaceCard key={p.id} place={p} onClick={() => setPlaceModal(p)} />)}
-                {filtered.length === 0 && (
-                  <div style={{ gridColumn: "1/-1", textAlign: "center", padding: 50, color: PALETTE.textLight }}>
-                    <div style={{ fontSize: 36, marginBottom: 8 }}>{places.length === 0 ? "🍜" : "🔍"}</div>
-                    <div style={{ fontSize: 14 }}>{places.length === 0 ? "No places yet." : "No matches."}</div>
-                  </div>
-                )}
-              </div>
+              {viewTab === "map" ? (
+                <MapView places={places} onClick={p => setPlaceModal(p)} />
+              ) : (
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 12 }}>
+                  {filtered.map(p => <PlaceCard key={p.id} place={p} onClick={() => setPlaceModal(p)} />)}
+                  {filtered.length === 0 && (
+                    <div style={{ gridColumn: "1/-1", textAlign: "center", padding: 50, color: PALETTE.textLight }}>
+                      <div style={{ fontSize: 36, marginBottom: 8 }}>{places.length === 0 ? "🍜" : "🔍"}</div>
+                      <div style={{ fontSize: 14 }}>{places.length === 0 ? "No places yet." : "No matches."}</div>
+                    </div>
+                  )}
+                </div>
+              )}
             </>
           )}
         </div>
-        {config.locations.length > 0 && !isEmpty && (
+        {config.locations.length > 0 && !isEmpty && viewTab !== "map" && (
           <div style={{ width: 200, flexShrink: 0 }}>
             <div style={{ position: "sticky", top: 20 }}>
               <h3 style={{ fontFamily: "'Playfair Display',serif", fontSize: 16, color: PALETTE.text, margin: "0 0 10px" }}>locations</h3>
