@@ -157,7 +157,8 @@ function AddressSearch({ value, onSelect }) {
     timer.current = setTimeout(async () => {
       setLoading(true);
       try {
-        const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&q=${encodeURIComponent(q)}&limit=5&countrycodes=us`);        const data = await res.json();
+        const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&q=${encodeURIComponent(q)}&limit=5&countrycodes=us`);
+        const data = await res.json();
         setResults(data);
         setOpen(true);
       } catch { setResults([]); }
@@ -176,7 +177,8 @@ function AddressSearch({ value, onSelect }) {
         <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "#fff", border: `1.5px solid ${PALETTE.border}`, borderRadius: 10, marginTop: 4, maxHeight: 220, overflowY: "auto", zIndex: 1001, boxShadow: "0 8px 24px rgba(44,37,32,.12)" }}>
           {results.map((r, i) => (
             <div key={i} onClick={() => {
-              const town = (r.address?.city || r.address?.town || r.address?.village || r.address?.suburb || "").toLowerCase();
+              const a = r.address || {};
+              const town = (a.city || a.town || a.village || a.suburb || a.hamlet || a.municipality || a.county || "").toLowerCase().replace(" county", "");
               onSelect({ lat: parseFloat(r.lat), lng: parseFloat(r.lon), address: r.display_name, town });
               setQuery(r.display_name);
               setOpen(false);
@@ -184,6 +186,68 @@ function AddressSearch({ value, onSelect }) {
               onMouseEnter={e => e.currentTarget.style.background = PALETTE.accentSoft}
               onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
               📍 {r.display_name}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── City Search (for Settings - cities only) ── */
+function CitySearch({ onSelect }) {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState([]);
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const timer = useRef(null);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    const h = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", h); return () => document.removeEventListener("mousedown", h);
+  }, []);
+
+  const doSearch = (q) => {
+    if (timer.current) clearTimeout(timer.current);
+    if (q.length < 2) { setResults([]); return; }
+    timer.current = setTimeout(async () => {
+      setLoading(true);
+      try {
+        // featureType=city restricts results to cities/towns/villages only
+        const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&featuretype=city&q=${encodeURIComponent(q)}&limit=6&countrycodes=us`);
+        const data = await res.json();
+        // de-duplicate by city name
+        const seen = new Set();
+        const cities = [];
+        data.forEach(r => {
+          const a = r.address || {};
+          const name = (a.city || a.town || a.village || a.hamlet || a.municipality || "").toLowerCase();
+          const state = a.state || "";
+          if (name && !seen.has(name)) { seen.add(name); cities.push({ name, label: `${name}${state ? ", " + state : ""}` }); }
+        });
+        setResults(cities);
+        setOpen(true);
+      } catch { setResults([]); }
+      setLoading(false);
+    }, 400);
+  };
+
+  return (
+    <div ref={ref} style={{ position: "relative", flex: 1 }}>
+      <input type="text" value={query}
+        onChange={e => { setQuery(e.target.value); doSearch(e.target.value); }}
+        placeholder="Search a city..."
+        style={{ width: "100%", border: `1.5px solid ${PALETTE.border}`, borderRadius: 10, padding: "8px 12px", fontSize: 13, fontFamily: "'DM Sans',sans-serif", color: PALETTE.text, outline: "none", background: "#fff", boxSizing: "border-box" }} />
+      {loading && <div style={{ fontSize: 11, color: PALETTE.textLight, marginTop: 4 }}>searching...</div>}
+      {open && results.length > 0 && (
+        <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "#fff", border: `1.5px solid ${PALETTE.border}`, borderRadius: 10, marginTop: 4, maxHeight: 220, overflowY: "auto", zIndex: 1001, boxShadow: "0 8px 24px rgba(44,37,32,.12)" }}>
+          {results.map((c, i) => (
+            <div key={i} onClick={() => { onSelect(c.name); setQuery(""); setResults([]); setOpen(false); }}
+              style={{ padding: "8px 12px", fontSize: 13, fontFamily: "'DM Sans',sans-serif", cursor: "pointer", color: PALETTE.text, borderBottom: `1px solid ${PALETTE.border}` }}
+              onMouseEnter={e => e.currentTarget.style.background = PALETTE.accentSoft}
+              onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+              📍 {c.label}
             </div>
           ))}
         </div>
@@ -257,7 +321,7 @@ function CategoryModal({ category, places, onClose }) {
   );
 }
 
-/* ── Settings List Manager ── */
+/* ── Settings List Manager (text-based, for categories & cost tiers) ── */
 function ListManager({ title, items, onUpdate, icon }) {
   const [newItem, setNewItem] = useState("");
   const [editIdx, setEditIdx] = useState(null);
@@ -308,8 +372,37 @@ function ListManager({ title, items, onUpdate, icon }) {
   );
 }
 
+/* ── Locations Manager (city-search based) ── */
+function LocationManager({ items, onUpdate }) {
+  const add = (city) => { if (city && !items.includes(city)) onUpdate([...items, city].sort()); };
+  const remove = i => onUpdate(items.filter((_, idx) => idx !== i));
+  return (
+    <div style={{ background: PALETTE.card, borderRadius: 14, border: `1px solid ${PALETTE.border}`, overflow: "hidden" }}>
+      <div style={{ padding: "16px 20px", borderBottom: `1px solid ${PALETTE.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <h3 style={{ fontFamily: "'Playfair Display',serif", fontSize: 18, color: PALETTE.text, margin: 0 }}>📍 Locations</h3>
+        <span style={{ fontSize: 13, color: PALETTE.textLight }}>{items.length} cities</span>
+      </div>
+      <div style={{ padding: "12px 20px", borderBottom: `1px solid ${PALETTE.border}`, display: "flex", gap: 8 }}>
+        <CitySearch onSelect={add} />
+      </div>
+      {items.length === 0 ? (
+        <div style={{ padding: "24px 20px", textAlign: "center", color: PALETTE.textLight, fontSize: 13 }}>No cities yet. Search above to add one!</div>
+      ) : (
+        <div style={{ maxHeight: 340, overflowY: "auto" }}>
+          {items.map((item, i) => (
+            <div key={item + i} style={{ padding: "10px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: `1px solid ${PALETTE.border}`, gap: 8 }}>
+              <span style={{ fontSize: 14, color: PALETTE.text, fontFamily: "'DM Sans',sans-serif" }}>📍 {item}</span>
+              <button onClick={() => remove(i)} style={{ background: "transparent", border: "none", cursor: "pointer", fontSize: 14, color: PALETTE.danger, padding: "2px 6px" }}>🗑</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ── Place Modal ── */
-function PlaceModal({ place, config, onSave, onClose, onDelete }) {
+function PlaceModal({ place, config, onSave, onClose, onDelete, onAddLocation }) {
   const isEdit = !!place?.id;
   const [form, setForm] = useState(place || { name: "", categories: [], cost: "", locations: [], website: "", imageUrl: "", rating: 0, visited: false, notes: "", lat: null, lng: null, address: "" });
   const update = (k, v) => setForm(f => ({ ...f, [k]: v }));
@@ -326,7 +419,11 @@ function PlaceModal({ place, config, onSave, onClose, onDelete }) {
           <div><label style={label}>Name *</label><input style={input} value={form.name} onChange={e => update("name", e.target.value)} placeholder="e.g. Dave's Hot Chicken" /></div>
           <div>
             <label style={label}>Find on map {form.lat && <span style={{ fontWeight: 400, textTransform: "none", color: PALETTE.visited }}>✓ pinned</span>}</label>
-              <AddressSearch value={form.address} onSelect={({ lat, lng, address, town }) => setForm(f => ({ ...f, lat, lng, address, locations: town && !f.locations.includes(town) ? [...f.locations, town] : f.locations }))} />          </div>
+            <AddressSearch value={form.address} onSelect={({ lat, lng, address, town }) => {
+              if (town) onAddLocation(town);
+              setForm(f => ({ ...f, lat, lng, address, locations: town && !f.locations.includes(town) ? [...f.locations, town] : f.locations }));
+            }} />
+          </div>
           <div>
             <label style={label}>Categories {config.categories.length === 0 && <span style={{ fontWeight: 400, textTransform: "none", color: PALETTE.textLight }}>(add in Settings)</span>}</label>
             <MultiSelect options={config.categories} selected={form.categories} onChange={v => update("categories", v)} placeholder="Select categories..." />
@@ -412,7 +509,7 @@ function PlaceCard({ place, onClick }) {
 /* ── Map View ── */
 function MapView({ places, onClick }) {
   const pinned = places.filter(p => p.lat && p.lng);
-  const center = pinned.length > 0 ? [pinned[0].lat, pinned[0].lng] : [38.8816, -77.0910]; // DC area default
+  const center = pinned.length > 0 ? [pinned[0].lat, pinned[0].lng] : [38.8816, -77.0910];
   return (
     <div style={{ borderRadius: 14, overflow: "hidden", border: `1px solid ${PALETTE.border}`, height: 560 }}>
       {pinned.length === 0 ? (
@@ -422,10 +519,7 @@ function MapView({ places, onClick }) {
         </div>
       ) : (
         <MapContainer center={center} zoom={11} style={{ height: "100%", width: "100%" }}>
-          <TileLayer
-            attribution='&copy; OpenStreetMap'
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          />
+          <TileLayer attribution='&copy; OpenStreetMap' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
           {pinned.map(p => (
             <Marker key={p.id} position={[p.lat, p.lng]} icon={pinIcon}>
               <Popup>
@@ -474,6 +568,12 @@ export default function App() {
   const handleDeletePlace = async (pid) => { await dbDeletePlace(pid); setPlaces(places.filter(p => p.id !== pid)); setPlaceModal(null); };
   const handleConfigUpdate = async (key, value, fullConfig) => { await dbSaveConfig(key, value); setConfig(fullConfig); };
   const handleClearAll = async () => { await dbClearAllPlaces(); setPlaces([]); };
+  const handleAddLocation = async (loc) => {
+    if (!loc || config.locations.includes(loc)) return;
+    const updated = [...config.locations, loc].sort();
+    setConfig(c => ({ ...c, locations: updated }));
+    await dbSaveConfig("locations", updated);
+  };
 
   const toggleCat = c => setActiveCats(prev => prev.includes(c) ? prev.filter(x => x !== c) : [...prev, c]);
   const toggleLoc = l => setActiveLocs(prev => prev.includes(l) ? prev.filter(x => x !== l) : [...prev, l]);
@@ -522,7 +622,7 @@ export default function App() {
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
             <ListManager title="Categories" icon="📂" items={config.categories} onUpdate={cats => handleConfigUpdate("categories", cats, { ...config, categories: cats })} />
-            <ListManager title="Locations" icon="📍" items={config.locations} onUpdate={locs => handleConfigUpdate("locations", locs, { ...config, locations: locs })} />
+            <LocationManager items={config.locations} onUpdate={locs => handleConfigUpdate("locations", locs, { ...config, locations: locs })} />
             <ListManager title="Cost Tiers" icon="💰" items={config.costTiers} onUpdate={tiers => handleConfigUpdate("costTiers", tiers, { ...config, costTiers: tiers })} />
             {places.length > 0 && (
               <div style={{ background: PALETTE.dangerBg, borderRadius: 14, padding: 20 }}>
@@ -631,7 +731,7 @@ export default function App() {
           </div>
         )}
       </div>
-      {placeModal !== null && <PlaceModal place={placeModal.id ? placeModal : null} config={config} onSave={handleSavePlace} onClose={() => setPlaceModal(null)} onDelete={handleDeletePlace} />}
+      {placeModal !== null && <PlaceModal place={placeModal.id ? placeModal : null} config={config} onSave={handleSavePlace} onClose={() => setPlaceModal(null)} onDelete={handleDeletePlace} onAddLocation={handleAddLocation} />}
       {catModal && <CategoryModal category={catModal} places={places} onClose={() => setCatModal(null)} />}
     </div>
   );
