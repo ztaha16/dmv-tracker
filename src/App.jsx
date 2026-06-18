@@ -14,20 +14,30 @@ const PALETTE = {
   text: "#2C2520", textMid: "#6B5E52", textLight: "#9C8E80",
   accent: "#D4829A", accentSoft: "#FFE8F2", tag: "#FFE8F2", tagText: "#C4889A",
   star: "#F0C8A0", starEmpty: "#FFE0F0", visited: "#BCE0FF", costBg: "#FFD0E4",
-  danger: "#E890A8", dangerBg: "#FFF0F4"
+  danger: "#E890A8", dangerBg: "#FFF0F4",
+  pinVisited: "#7FBFE0", pinWishlist: "#D4829A"
 };
 
 const EMPTY_CONFIG = { categories: [], locations: [], costTiers: [] };
 function gid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
 
-// Custom pink map pin
-const pinIcon = L.divIcon({
-  className: "custom-pin",
-  html: `<div style="background:${PALETTE.accent};width:24px;height:24px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.3)"></div>`,
-  iconSize: [24, 24],
-  iconAnchor: [12, 24],
-  popupAnchor: [0, -24]
-});
+function distanceMiles(lat1, lng1, lat2, lng2) {
+  const R = 3958.8;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function makePin(color) {
+  return L.divIcon({
+    className: "custom-pin",
+    html: `<div style="background:${color};width:24px;height:24px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.3)"></div>`,
+    iconSize: [24, 24], iconAnchor: [12, 24], popupAnchor: [0, -24]
+  });
+}
+const pinVisitedIcon = makePin(PALETTE.pinVisited);
+const pinWishlistIcon = makePin(PALETTE.pinWishlist);
 
 /* ── Database helpers ── */
 async function dbLoadPlaces() {
@@ -145,12 +155,10 @@ function AddressSearch({ value, onSelect }) {
   const [loading, setLoading] = useState(false);
   const timer = useRef(null);
   const ref = useRef(null);
-
   useEffect(() => {
     const h = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
     document.addEventListener("mousedown", h); return () => document.removeEventListener("mousedown", h);
   }, []);
-
   const doSearch = (q) => {
     if (timer.current) clearTimeout(timer.current);
     if (q.length < 3) { setResults([]); return; }
@@ -159,13 +167,11 @@ function AddressSearch({ value, onSelect }) {
       try {
         const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&q=${encodeURIComponent(q)}&limit=5&countrycodes=us`);
         const data = await res.json();
-        setResults(data);
-        setOpen(true);
+        setResults(data); setOpen(true);
       } catch { setResults([]); }
       setLoading(false);
     }, 400);
   };
-
   return (
     <div ref={ref} style={{ position: "relative" }}>
       <input type="text" value={query}
@@ -180,8 +186,7 @@ function AddressSearch({ value, onSelect }) {
               const a = r.address || {};
               const town = (a.city || a.town || a.village || a.suburb || a.hamlet || a.municipality || a.county || "").toLowerCase().replace(" county", "");
               onSelect({ lat: parseFloat(r.lat), lng: parseFloat(r.lon), address: r.display_name, town });
-              setQuery(r.display_name);
-              setOpen(false);
+              setQuery(r.display_name); setOpen(false);
             }} style={{ padding: "8px 12px", fontSize: 12, fontFamily: "'DM Sans',sans-serif", cursor: "pointer", color: PALETTE.text, borderBottom: `1px solid ${PALETTE.border}`, lineHeight: 1.4 }}
               onMouseEnter={e => e.currentTarget.style.background = PALETTE.accentSoft}
               onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
@@ -194,7 +199,7 @@ function AddressSearch({ value, onSelect }) {
   );
 }
 
-/* ── City Search (for Settings - cities only) ── */
+/* ── City Search (Settings) ── */
 function CitySearch({ onSelect }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState([]);
@@ -202,22 +207,18 @@ function CitySearch({ onSelect }) {
   const [loading, setLoading] = useState(false);
   const timer = useRef(null);
   const ref = useRef(null);
-
   useEffect(() => {
     const h = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
     document.addEventListener("mousedown", h); return () => document.removeEventListener("mousedown", h);
   }, []);
-
   const doSearch = (q) => {
     if (timer.current) clearTimeout(timer.current);
     if (q.length < 2) { setResults([]); return; }
     timer.current = setTimeout(async () => {
       setLoading(true);
       try {
-        // featureType=city restricts results to cities/towns/villages only
-        const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&featuretype=city&q=${encodeURIComponent(q)}&limit=6&countrycodes=us`);
+        const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&q=${encodeURIComponent(q)}&limit=10&countrycodes=us`);
         const data = await res.json();
-        // de-duplicate by city name
         const seen = new Set();
         const cities = [];
         data.forEach(r => {
@@ -226,13 +227,11 @@ function CitySearch({ onSelect }) {
           const state = a.state || "";
           if (name && !seen.has(name)) { seen.add(name); cities.push({ name, label: `${name}${state ? ", " + state : ""}` }); }
         });
-        setResults(cities);
-        setOpen(true);
+        setResults(cities); setOpen(true);
       } catch { setResults([]); }
       setLoading(false);
     }, 400);
   };
-
   return (
     <div ref={ref} style={{ position: "relative", flex: 1 }}>
       <input type="text" value={query}
@@ -321,7 +320,7 @@ function CategoryModal({ category, places, onClose }) {
   );
 }
 
-/* ── Settings List Manager (text-based, for categories & cost tiers) ── */
+/* ── Settings List Manager ── */
 function ListManager({ title, items, onUpdate, icon }) {
   const [newItem, setNewItem] = useState("");
   const [editIdx, setEditIdx] = useState(null);
@@ -372,7 +371,7 @@ function ListManager({ title, items, onUpdate, icon }) {
   );
 }
 
-/* ── Locations Manager (city-search based) ── */
+/* ── Locations Manager ── */
 function LocationManager({ items, onUpdate }) {
   const add = (city) => { if (city && !items.includes(city)) onUpdate([...items, city].sort()); };
   const remove = i => onUpdate(items.filter((_, idx) => idx !== i));
@@ -466,7 +465,7 @@ function PlaceModal({ place, config, onSave, onClose, onDelete, onAddLocation })
 }
 
 /* ── Place Card ── */
-function PlaceCard({ place, onClick }) {
+function PlaceCard({ place, onClick, distance }) {
   const [hov, setHov] = useState(false);
   return (
     <div onClick={() => onClick(place)} onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
@@ -481,6 +480,11 @@ function PlaceCard({ place, onClick }) {
           {place.visited && <span style={{ color: PALETTE.visited, fontSize: 14 }}>✔</span>}
           <h3 style={{ fontFamily: "'Playfair Display',serif", fontSize: 14, color: PALETTE.text, margin: 0, lineHeight: 1.3 }}>{place.name}</h3>
         </div>
+        {typeof distance === "number" && (
+          <div style={{ fontSize: 11, color: PALETTE.accent, fontWeight: 600, marginBottom: 6, fontFamily: "'DM Sans',sans-serif" }}>
+            📍 {distance < 0.1 ? "< 0.1" : distance.toFixed(1)} mi away
+          </div>
+        )}
         {place.categories?.length > 0 && (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 6 }}>
             {place.categories.map(c => <Chip key={c} label={c} small />)}
@@ -507,9 +511,9 @@ function PlaceCard({ place, onClick }) {
 }
 
 /* ── Map View ── */
-function MapView({ places, onClick }) {
+function MapView({ places, onClick, userLoc }) {
   const pinned = places.filter(p => p.lat && p.lng);
-  const center = pinned.length > 0 ? [pinned[0].lat, pinned[0].lng] : [38.8816, -77.0910];
+  const center = userLoc ? [userLoc.lat, userLoc.lng] : pinned.length > 0 ? [pinned[0].lat, pinned[0].lng] : [38.8816, -77.0910];
   return (
     <div style={{ borderRadius: 14, overflow: "hidden", border: `1px solid ${PALETTE.border}`, height: 560 }}>
       {pinned.length === 0 ? (
@@ -520,14 +524,20 @@ function MapView({ places, onClick }) {
       ) : (
         <MapContainer center={center} zoom={11} style={{ height: "100%", width: "100%" }}>
           <TileLayer attribution='&copy; OpenStreetMap' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+          {userLoc && (
+            <Marker position={[userLoc.lat, userLoc.lng]} icon={L.divIcon({ className: "me-pin", html: `<div style="background:#4A90D9;width:18px;height:18px;border-radius:50%;border:3px solid #fff;box-shadow:0 0 0 4px rgba(74,144,217,.3)"></div>`, iconSize: [18,18], iconAnchor: [9,9] })}>
+              <Popup>You are here</Popup>
+            </Marker>
+          )}
           {pinned.map(p => (
-            <Marker key={p.id} position={[p.lat, p.lng]} icon={pinIcon}>
+            <Marker key={p.id} position={[p.lat, p.lng]} icon={p.visited ? pinVisitedIcon : pinWishlistIcon}>
               <Popup>
                 <div style={{ fontFamily: "'DM Sans',sans-serif", minWidth: 140 }}>
                   <div style={{ fontWeight: 700, fontSize: 14, color: PALETTE.text, marginBottom: 4 }}>{p.name}</div>
                   {p.categories?.length > 0 && <div style={{ fontSize: 11, color: PALETTE.tagText, marginBottom: 4 }}>{p.categories.join(", ")}</div>}
                   {p.rating > 0 && <div style={{ color: PALETTE.star, fontSize: 13 }}>{"★".repeat(p.rating)}</div>}
                   {p.cost && <div style={{ fontSize: 12, color: PALETTE.textMid, marginTop: 2 }}>{p.cost}</div>}
+                  <div style={{ fontSize: 11, color: p.visited ? PALETTE.pinVisited : PALETTE.pinWishlist, marginTop: 2, fontWeight: 600 }}>{p.visited ? "✓ visited" : "want to visit"}</div>
                   <button onClick={() => onClick(p)} style={{ marginTop: 6, padding: "4px 10px", borderRadius: 6, border: "none", background: PALETTE.accent, color: "#fff", fontSize: 11, cursor: "pointer", fontFamily: "'DM Sans',sans-serif" }}>edit</button>
                 </div>
               </Popup>
@@ -551,6 +561,10 @@ export default function App() {
   const [catModal, setCatModal] = useState(null);
   const [page, setPage] = useState("main");
   const [loading, setLoading] = useState(true);
+  const [userLoc, setUserLoc] = useState(null);
+  const [nearMe, setNearMe] = useState(false);
+  const [locStatus, setLocStatus] = useState("");
+  const [surprise, setSurprise] = useState(null);
 
   useEffect(() => {
     (async () => {
@@ -569,16 +583,37 @@ export default function App() {
   const handleConfigUpdate = async (key, value, fullConfig) => { await dbSaveConfig(key, value); setConfig(fullConfig); };
   const handleClearAll = async () => { await dbClearAllPlaces(); setPlaces([]); };
   const handleAddLocation = async (loc) => {
-    if (!loc || config.locations.includes(loc)) return;
-    const updated = [...config.locations, loc].sort();
-    setConfig(c => ({ ...c, locations: updated }));
-    await dbSaveConfig("locations", updated);
+    if (!loc) return;
+    setConfig(prev => {
+      if (prev.locations.includes(loc)) return prev;
+      const updated = [...prev.locations, loc].sort();
+      dbSaveConfig("locations", updated);
+      return { ...prev, locations: updated };
+    });
+  };
+
+  const requestLocation = () => {
+    if (!navigator.geolocation) { setLocStatus("Location not supported on this device"); return; }
+    setLocStatus("getting your location...");
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setUserLoc({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+        setNearMe(true);
+        setViewTab("overview");
+        setLocStatus("");
+      },
+      () => { setLocStatus("couldn't get location — check browser permissions"); },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
   };
 
   const toggleCat = c => setActiveCats(prev => prev.includes(c) ? prev.filter(x => x !== c) : [...prev, c]);
   const toggleLoc = l => setActiveLocs(prev => prev.includes(l) ? prev.filter(x => x !== l) : [...prev, l]);
 
-  const filtered = places
+  const withDistance = (p) => (nearMe && userLoc && p.lat && p.lng)
+    ? distanceMiles(userLoc.lat, userLoc.lng, p.lat, p.lng) : undefined;
+
+  let filtered = places
     .filter(p => {
       if (activeCats.length > 0 && !activeCats.some(c => p.categories?.includes(c))) return false;
       if (activeLocs.length > 0 && !activeLocs.some(l => p.locations?.includes(l))) return false;
@@ -588,15 +623,29 @@ export default function App() {
       return true;
     })
     .sort((a, b) => {
+      if (nearMe && userLoc) {
+        const da = withDistance(a), db = withDistance(b);
+        if (da == null && db == null) return 0;
+        if (da == null) return 1;
+        if (db == null) return -1;
+        return da - db;
+      }
       if (viewTab === "view by rating") return (b.rating || 0) - (a.rating || 0);
       if (viewTab === "view by cost") { const idx = t => config.costTiers.indexOf(t); return (idx(a.cost) === -1 ? 99 : idx(a.cost)) - (idx(b.cost) === -1 ? 99 : idx(b.cost)); }
       return a.name.localeCompare(b.name);
     });
 
   const isEmpty = config.categories.length === 0 && config.locations.length === 0 && places.length === 0;
+  const visitedCount = places.filter(p => p.visited).length;
+
+  const pickSurprise = () => {
+    const pool = places.filter(p => !p.visited);
+    if (pool.length === 0) { setSurprise({ none: true }); return; }
+    setSurprise(pool[Math.floor(Math.random() * pool.length)]);
+  };
 
   const tabBtn = (label, value) => (
-    <button key={value} onClick={() => setViewTab(value)} style={{
+    <button key={value} onClick={() => { setViewTab(value); }} style={{
       padding: "6px 16px", borderRadius: 8, border: "none",
       background: viewTab === value ? PALETTE.accent : "transparent",
       color: viewTab === value ? "#fff" : PALETTE.textMid,
@@ -644,9 +693,10 @@ export default function App() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
           <div>
             <h1 style={{ fontFamily: "'Playfair Display',serif", fontSize: 28, color: PALETTE.text, margin: "0 0 2px", letterSpacing: "-.5px" }}>dmv+ tracker</h1>
-            <p style={{ color: PALETTE.textLight, fontSize: 13, margin: 0 }}>{places.length} places · {places.filter(p => p.visited).length} visited</p>
+            <p style={{ color: PALETTE.textLight, fontSize: 13, margin: 0 }}>{places.length} places · {visitedCount} visited{places.length > 0 ? ` · ${Math.round(visitedCount / places.length * 100)}% explored` : ""}</p>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={pickSurprise} style={{ padding: "9px 16px", borderRadius: 10, border: `1.5px solid ${PALETTE.border}`, background: "transparent", color: PALETTE.textMid, fontFamily: "'DM Sans',sans-serif", fontSize: 13, cursor: "pointer" }}>🎲 surprise me</button>
             <button onClick={() => setPage("settings")} style={{ padding: "9px 16px", borderRadius: 10, border: `1.5px solid ${PALETTE.border}`, background: "transparent", color: PALETTE.textMid, fontFamily: "'DM Sans',sans-serif", fontSize: 13, cursor: "pointer" }}>⚙️ Settings</button>
             <button onClick={() => setPlaceModal({})} style={{ padding: "9px 20px", borderRadius: 10, border: "none", background: PALETTE.accent, color: "#fff", fontFamily: "'DM Sans',sans-serif", fontSize: 13, fontWeight: 600, cursor: "pointer", boxShadow: "0 4px 12px rgba(212,130,154,.25)" }}>+ Add Place</button>
           </div>
@@ -676,16 +726,22 @@ export default function App() {
               <div style={{ marginBottom: 16 }}>
                 <h2 style={{ fontFamily: "'Playfair Display',serif", fontSize: 20, color: PALETTE.text, margin: "0 0 10px" }}>cafe + restaurant tracker</h2>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                  <div style={{ display: "flex", gap: 4, background: PALETTE.card, borderRadius: 10, border: `1.5px solid ${PALETTE.border}`, padding: 3 }}>
+                  <div style={{ display: "flex", gap: 4, background: PALETTE.card, borderRadius: 10, border: `1.5px solid ${PALETTE.border}`, padding: 3, flexWrap: "wrap" }}>
                     {tabBtn("⊞ overview", "overview")}
                     {tabBtn("★ rating", "view by rating")}
                     {tabBtn("💰 cost", "view by cost")}
                     {tabBtn("📍 want to visit", "want to visit")}
                     {tabBtn("🗺️ map", "map")}
                   </div>
+                  <button onClick={nearMe ? () => { setNearMe(false); setUserLoc(null); } : requestLocation}
+                    style={{ padding: "7px 14px", borderRadius: 8, border: "none", background: nearMe ? PALETTE.pinVisited : PALETTE.accentSoft, color: nearMe ? "#fff" : PALETTE.accent, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "'DM Sans',sans-serif" }}>
+                    {nearMe ? "✓ near me" : "📍 near me"}
+                  </button>
                   {viewTab !== "map" && <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍 search..."
                     style={{ border: `1.5px solid ${PALETTE.border}`, borderRadius: 10, padding: "6px 12px", fontSize: 12, fontFamily: "'DM Sans',sans-serif", color: PALETTE.text, outline: "none", background: "#fff", width: 160 }} />}
                 </div>
+                {locStatus && <div style={{ fontSize: 12, color: PALETTE.textMid, marginTop: 8 }}>{locStatus}</div>}
+                {nearMe && !locStatus && <div style={{ fontSize: 12, color: PALETTE.accent, marginTop: 8, fontWeight: 600 }}>showing places nearest to you · pinned places only have distances</div>}
               </div>
               {(activeCats.length > 0 || activeLocs.length > 0) && viewTab !== "map" && (
                 <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
@@ -695,10 +751,10 @@ export default function App() {
                 </div>
               )}
               {viewTab === "map" ? (
-                <MapView places={places} onClick={p => setPlaceModal(p)} />
+                <MapView places={places} onClick={p => setPlaceModal(p)} userLoc={userLoc} />
               ) : (
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 12 }}>
-                  {filtered.map(p => <PlaceCard key={p.id} place={p} onClick={() => setPlaceModal(p)} />)}
+                  {filtered.map(p => <PlaceCard key={p.id} place={p} onClick={() => setPlaceModal(p)} distance={withDistance(p)} />)}
                   {filtered.length === 0 && (
                     <div style={{ gridColumn: "1/-1", textAlign: "center", padding: 50, color: PALETTE.textLight }}>
                       <div style={{ fontSize: 36, marginBottom: 8 }}>{places.length === 0 ? "🍜" : "🔍"}</div>
@@ -733,6 +789,28 @@ export default function App() {
       </div>
       {placeModal !== null && <PlaceModal place={placeModal.id ? placeModal : null} config={config} onSave={handleSavePlace} onClose={() => setPlaceModal(null)} onDelete={handleDeletePlace} onAddLocation={handleAddLocation} />}
       {catModal && <CategoryModal category={catModal} places={places} onClose={() => setCatModal(null)} />}
+      {surprise && (
+        <div onClick={() => setSurprise(null)} style={{ position: "fixed", inset: 0, background: "rgba(44,37,32,.4)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1100, padding: 16 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: PALETTE.bg, borderRadius: 16, width: "100%", maxWidth: 380, padding: 28, textAlign: "center", boxShadow: "0 20px 60px rgba(44,37,32,.2)" }}>
+            <div style={{ fontSize: 36, marginBottom: 8 }}>🎲</div>
+            {surprise.none ? (
+              <p style={{ fontFamily: "'DM Sans',sans-serif", color: PALETTE.textMid }}>You've visited everywhere! Add more places to your wishlist.</p>
+            ) : (
+              <>
+                <div style={{ fontSize: 12, color: PALETTE.textLight, textTransform: "uppercase", letterSpacing: ".5px", marginBottom: 6 }}>tonight, try...</div>
+                <h2 style={{ fontFamily: "'Playfair Display',serif", fontSize: 24, color: PALETTE.text, margin: "0 0 10px" }}>{surprise.name}</h2>
+                {surprise.categories?.length > 0 && <div style={{ display: "flex", gap: 5, justifyContent: "center", flexWrap: "wrap", marginBottom: 8 }}>{surprise.categories.map(c => <Chip key={c} label={c} small />)}</div>}
+                {surprise.locations?.length > 0 && <div style={{ fontSize: 13, color: PALETTE.textMid, marginBottom: 6 }}>📍 {surprise.locations.join(", ")}</div>}
+                {surprise.cost && <div style={{ fontSize: 13, color: PALETTE.textMid }}>{surprise.cost}</div>}
+                <div style={{ display: "flex", gap: 8, marginTop: 18, justifyContent: "center" }}>
+                  <button onClick={pickSurprise} style={{ padding: "9px 18px", borderRadius: 10, border: `1.5px solid ${PALETTE.border}`, background: "transparent", color: PALETTE.textMid, fontSize: 13, cursor: "pointer", fontFamily: "'DM Sans',sans-serif" }}>🎲 again</button>
+                  <button onClick={() => { setPlaceModal(surprise); setSurprise(null); }} style={{ padding: "9px 18px", borderRadius: 10, border: "none", background: PALETTE.accent, color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "'DM Sans',sans-serif" }}>view</button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
