@@ -15,10 +15,11 @@ const PALETTE = {
   accent: "#D4829A", accentSoft: "#FFE8F2", tag: "#FFE8F2", tagText: "#C4889A",
   star: "#F0C8A0", starEmpty: "#FFE0F0", visited: "#BCE0FF", costBg: "#FFD0E4",
   danger: "#E890A8", dangerBg: "#FFF0F4",
-  pinVisited: "#7FBFE0", pinWishlist: "#D4829A"
+  pinVisited: "#7FBFE0", pinWishlist: "#D4829A",
+  dietTag: "#E1F5EE", dietTagText: "#0F6E56"
 };
 
-const EMPTY_CONFIG = { categories: [], locations: [], costTiers: [] };
+const EMPTY_CONFIG = { categories: [], dietary: [], locations: [], costTiers: [] };
 function gid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
 
 function distanceMiles(lat1, lng1, lat2, lng2) {
@@ -47,6 +48,7 @@ async function dbLoadPlaces() {
     id: r.id, name: r.name, categories: r.categories || [], cost: r.cost || "",
     locations: r.locations || [], website: r.website || "", imageUrl: r.image_url || "",
     rating: r.rating || 0, visited: r.visited || false, notes: r.notes || "",
+    dietary: r.dietary || [],
     lat: r.lat ?? null, lng: r.lng ?? null, address: r.address || ""
   }));
 }
@@ -62,6 +64,7 @@ async function dbUpsertPlace(place) {
     id: place.id, name: place.name, categories: place.categories, cost: place.cost,
     locations: place.locations, website: place.website, image_url: place.imageUrl,
     rating: place.rating, visited: place.visited, notes: place.notes,
+    dietary: place.dietary || [],
     lat: place.lat, lng: place.lng, address: place.address
   };
   const { error } = await supabase.from("places").upsert(row);
@@ -92,11 +95,13 @@ function StarRating({ rating, onRate, size = 18, interactive = false }) {
   );
 }
 
-function Chip({ label, onRemove, active, onClick, small }) {
+function Chip({ label, onRemove, active, onClick, small, green }) {
+  const bg = active ? (green ? PALETTE.dietTagText : PALETTE.accent) : (green ? PALETTE.dietTag : PALETTE.tag);
+  const fg = active ? "#fff" : (green ? PALETTE.dietTagText : PALETTE.tagText);
   return (
     <span onClick={onClick} style={{
-      background: active ? PALETTE.accent : PALETTE.tag,
-      color: active ? "#fff" : PALETTE.tagText,
+      background: bg,
+      color: fg,
       padding: small ? "2px 8px" : "5px 14px",
       borderRadius: 8, fontSize: small ? 11 : 13,
       fontFamily: "'DM Sans',sans-serif", display: "inline-flex", alignItems: "center", gap: 5,
@@ -109,7 +114,7 @@ function Chip({ label, onRemove, active, onClick, small }) {
   );
 }
 
-function MultiSelect({ options, selected, onChange, placeholder, allowCustom, onAddNew }) {
+function MultiSelect({ options, selected, onChange, placeholder, allowCustom, onAddNew, green }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const ref = useRef(null);
@@ -135,7 +140,7 @@ function MultiSelect({ options, selected, onChange, placeholder, allowCustom, on
         background: "#fff", alignItems: "center"
       }}>
         {selected.length === 0 && <span style={{ color: PALETTE.textLight, fontSize: 13 }}>{placeholder}</span>}
-        {selected.map(s => <Chip key={s} label={s} small onRemove={() => toggle(s)} />)}
+        {selected.map(s => <Chip key={s} label={s} small green={green} onRemove={() => toggle(s)} />)}
       </div>
       {open && (
         <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "#fff", border: `1.5px solid ${PALETTE.border}`, borderRadius: 10, marginTop: 4, maxHeight: 200, overflowY: "auto", zIndex: 999, boxShadow: "0 8px 24px rgba(44,37,32,.1)" }}>
@@ -187,11 +192,26 @@ function AddressSearch({ value, onSelect }) {
       setLoading(false);
     }, 400);
   };
+  const geocodeAndSelect = async () => {
+    const q = query.trim();
+    if (q.length < 3) return;
+    try {
+      const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&q=${encodeURIComponent(q)}&limit=1&countrycodes=us`);
+      const data = await res.json();
+      if (data && data[0]) {
+        const r = data[0]; const a = r.address || {};
+        const town = (a.city || a.town || a.village || a.suburb || a.hamlet || a.municipality || a.county || "").toLowerCase().replace(" county", "");
+        onSelect({ lat: parseFloat(r.lat), lng: parseFloat(r.lon), address: r.display_name, town });
+        setQuery(r.display_name); setOpen(false);
+      }
+    } catch { /* ignore */ }
+  };
   return (
     <div ref={ref} style={{ position: "relative" }}>
       <input type="text" value={query}
         onChange={e => { setQuery(e.target.value); doSearch(e.target.value); }}
-        placeholder="Search restaurant or address..."
+        onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); geocodeAndSelect(); } }}
+        placeholder="Type an address & press Enter, or pick below..."
         style={{ width: "100%", border: `1.5px solid ${PALETTE.border}`, borderRadius: 10, padding: "9px 12px", fontSize: 14, fontFamily: "'DM Sans',sans-serif", color: PALETTE.text, outline: "none", background: "#fff", boxSizing: "border-box" }} />
       {loading && <div style={{ fontSize: 11, color: PALETTE.textLight, marginTop: 4 }}>searching...</div>}
       {open && results.length > 0 && (
@@ -416,9 +436,9 @@ function LocationManager({ items, onUpdate }) {
 }
 
 /* ── Place Modal ── */
-function PlaceModal({ place, config, onSave, onClose, onDelete, onAddLocation }) {
+function PlaceModal({ place, config, onSave, onClose, onDelete, onAddLocation, onAddDietary }) {
   const isEdit = !!place?.id;
-  const [form, setForm] = useState(place || { name: "", categories: [], cost: "", locations: [], website: "", imageUrl: "", rating: 0, visited: false, notes: "", lat: null, lng: null, address: "" });
+  const [form, setForm] = useState(place || { name: "", categories: [], dietary: [], cost: "", locations: [], website: "", imageUrl: "", rating: 0, visited: false, notes: "", lat: null, lng: null, address: "" });
   const update = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const label = { fontSize: 12, fontWeight: 600, color: PALETTE.textMid, marginBottom: 5, display: "block", fontFamily: "'DM Sans',sans-serif", textTransform: "uppercase", letterSpacing: ".5px" };
   const input = { width: "100%", border: `1.5px solid ${PALETTE.border}`, borderRadius: 10, padding: "9px 12px", fontSize: 14, fontFamily: "'DM Sans',sans-serif", color: PALETTE.text, outline: "none", background: "#fff", boxSizing: "border-box" };
@@ -441,6 +461,10 @@ function PlaceModal({ place, config, onSave, onClose, onDelete, onAddLocation })
           <div>
             <label style={label}>Categories {config.categories.length === 0 && <span style={{ fontWeight: 400, textTransform: "none", color: PALETTE.textLight }}>(add in Settings)</span>}</label>
             <MultiSelect options={config.categories} selected={form.categories} onChange={v => update("categories", v)} placeholder="Select categories..." />
+          </div>
+          <div>
+            <label style={label}>Dietary {config.dietary.length === 0 && <span style={{ fontWeight: 400, textTransform: "none", color: PALETTE.textLight }}>(halal, vegan, etc — add in Settings)</span>}</label>
+            <MultiSelect options={config.dietary} selected={form.dietary || []} onChange={v => update("dietary", v)} placeholder="Select dietary tags..." green allowCustom onAddNew={d => onAddDietary(d)} />
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <div>
@@ -505,6 +529,11 @@ function PlaceCard({ place, onClick, distance }) {
             {place.categories.map(c => <Chip key={c} label={c} small />)}
           </div>
         )}
+        {place.dietary?.length > 0 && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 6 }}>
+            {place.dietary.map(d => <Chip key={d} label={d} small green />)}
+          </div>
+        )}
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           {place.cost && <span style={{ background: PALETTE.costBg, padding: "2px 8px", borderRadius: 5, fontSize: 11, fontFamily: "'DM Sans',sans-serif", color: PALETTE.textMid, fontWeight: 500 }}>{place.cost}</span>}
           {place.rating > 0 && <StarRating rating={place.rating} size={12} />}
@@ -545,15 +574,20 @@ function MapView({ places, onClick, userLoc }) {
             </Marker>
           )}
           {pinned.map(p => (
-            <Marker key={p.id} position={[p.lat, p.lng]} icon={p.visited ? pinVisitedIcon : pinWishlistIcon}>
+            <Marker key={p.id} position={[p.lat, p.lng]} icon={p.visited ? pinVisitedIcon : pinWishlistIcon}
+              eventHandlers={{
+                mouseover: (e) => e.target.openPopup(),
+                mouseout: (e) => e.target.closePopup()
+              }}>
               <Popup>
-                <div style={{ fontFamily: "'DM Sans',sans-serif", minWidth: 140 }}>
+                <div style={{ fontFamily: "'DM Sans',sans-serif", minWidth: 150 }}>
+                  {p.imageUrl && <div style={{ width: "100%", height: 90, borderRadius: 8, marginBottom: 6, background: `url(${p.imageUrl}) center/cover`, backgroundColor: PALETTE.accentSoft }} />}
                   <div style={{ fontWeight: 700, fontSize: 14, color: PALETTE.text, marginBottom: 4 }}>{p.name}</div>
-                  {p.categories?.length > 0 && <div style={{ fontSize: 11, color: PALETTE.tagText, marginBottom: 4 }}>{p.categories.join(", ")}</div>}
+                  {p.categories?.length > 0 && <div style={{ fontSize: 11, color: PALETTE.tagText, marginBottom: 2 }}>{p.categories.join(", ")}</div>}
+                  {p.dietary?.length > 0 && <div style={{ fontSize: 11, color: PALETTE.dietTagText, marginBottom: 4 }}>{p.dietary.join(", ")}</div>}
                   {p.rating > 0 && <div style={{ color: PALETTE.star, fontSize: 13 }}>{"★".repeat(p.rating)}</div>}
                   {p.cost && <div style={{ fontSize: 12, color: PALETTE.textMid, marginTop: 2 }}>{p.cost}</div>}
                   <div style={{ fontSize: 11, color: p.visited ? PALETTE.pinVisited : PALETTE.pinWishlist, marginTop: 2, fontWeight: 600 }}>{p.visited ? "✓ visited" : "want to visit"}</div>
-                  <button onClick={() => onClick(p)} style={{ marginTop: 6, padding: "4px 10px", borderRadius: 6, border: "none", background: PALETTE.accent, color: "#fff", fontSize: 11, cursor: "pointer", fontFamily: "'DM Sans',sans-serif" }}>edit</button>
                 </div>
               </Popup>
             </Marker>
@@ -570,7 +604,9 @@ export default function App() {
   const [config, setConfig] = useState(EMPTY_CONFIG);
   const [viewTab, setViewTab] = useState("overview");
   const [activeCats, setActiveCats] = useState([]);
+  const [activeDiet, setActiveDiet] = useState([]);
   const [activeLocs, setActiveLocs] = useState([]);
+  const [showAddCity, setShowAddCity] = useState(false);
   const [search, setSearch] = useState("");
   const [placeModal, setPlaceModal] = useState(null);
   const [catModal, setCatModal] = useState(null);
@@ -606,6 +642,15 @@ export default function App() {
       return { ...prev, locations: updated };
     });
   };
+  const handleAddDietary = async (d) => {
+    if (!d) return;
+    setConfig(prev => {
+      if (prev.dietary.includes(d)) return prev;
+      const updated = [...prev.dietary, d].sort();
+      dbSaveConfig("dietary", updated);
+      return { ...prev, dietary: updated };
+    });
+  };
 
   const requestLocation = () => {
     if (!navigator.geolocation) { setLocStatus("Location not supported on this device"); return; }
@@ -623,6 +668,7 @@ export default function App() {
   };
 
   const toggleCat = c => setActiveCats(prev => prev.includes(c) ? prev.filter(x => x !== c) : [...prev, c]);
+  const toggleDiet = d => setActiveDiet(prev => prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d]);
   const toggleLoc = l => setActiveLocs(prev => prev.includes(l) ? prev.filter(x => x !== l) : [...prev, l]);
 
   const withDistance = (p) => (nearMe && userLoc && p.lat && p.lng)
@@ -631,6 +677,7 @@ export default function App() {
   let filtered = places
     .filter(p => {
       if (activeCats.length > 0 && !activeCats.some(c => p.categories?.includes(c))) return false;
+      if (activeDiet.length > 0 && !activeDiet.every(d => p.dietary?.includes(d))) return false;
       if (activeLocs.length > 0 && !activeLocs.some(l => p.locations?.includes(l))) return false;
       if (viewTab === "want to visit" && p.visited) return false;
       if (viewTab === "view by rating" && !p.rating) return false;
@@ -686,6 +733,7 @@ export default function App() {
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
             <ListManager title="Categories" icon="📂" items={config.categories} onUpdate={cats => handleConfigUpdate("categories", cats, { ...config, categories: cats })} />
+            <ListManager title="Dietary" icon="🥗" items={config.dietary} onUpdate={d => handleConfigUpdate("dietary", d, { ...config, dietary: d })} />
             <LocationManager items={config.locations} onUpdate={locs => handleConfigUpdate("locations", locs, { ...config, locations: locs })} />
             <ListManager title="Cost Tiers" icon="💰" items={config.costTiers} onUpdate={tiers => handleConfigUpdate("costTiers", tiers, { ...config, costTiers: tiers })} />
             {places.length > 0 && (
@@ -726,6 +774,17 @@ export default function App() {
             </div>
           </div>
         )}
+        {config.dietary.length > 0 && (
+          <div style={{ marginTop: 14 }}>
+            <div style={{ fontSize: 12, color: PALETTE.textLight, marginBottom: 6, textTransform: "uppercase", letterSpacing: ".5px", fontWeight: 600 }}>dietary</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+              {config.dietary.map(d => (
+                <Chip key={d} label={d} green active={activeDiet.includes(d)} onClick={() => toggleDiet(d)} />
+              ))}
+              {activeDiet.length > 0 && <span onClick={() => setActiveDiet([])} style={{ fontSize: 12, color: PALETTE.danger, cursor: "pointer", fontFamily: "'DM Sans',sans-serif" }}>clear</span>}
+            </div>
+          </div>
+        )}
       </div>
       <div style={{ maxWidth: 1400, margin: "0 auto", padding: "16px 28px 40px", display: "flex", gap: 24 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -758,10 +817,11 @@ export default function App() {
                 {locStatus && <div style={{ fontSize: 12, color: PALETTE.textMid, marginTop: 8 }}>{locStatus}</div>}
                 {nearMe && !locStatus && <div style={{ fontSize: 12, color: PALETTE.accent, marginTop: 8, fontWeight: 600 }}>showing places nearest to you · pinned places only have distances</div>}
               </div>
-              {(activeCats.length > 0 || activeLocs.length > 0) && viewTab !== "map" && (
+              {(activeCats.length > 0 || activeDiet.length > 0 || activeLocs.length > 0) && viewTab !== "map" && (
                 <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
                   <span style={{ fontSize: 12, color: PALETTE.textLight }}>Filtering:</span>
                   {activeCats.map(c => <Chip key={c} label={c} small active onRemove={() => toggleCat(c)} />)}
+                  {activeDiet.map(d => <Chip key={d} label={d} small green active onRemove={() => toggleDiet(d)} />)}
                   {activeLocs.map(l => <Chip key={l} label={`📍 ${l}`} small active onRemove={() => toggleLoc(l)} />)}
                 </div>
               )}
@@ -784,7 +844,15 @@ export default function App() {
         {config.locations.length > 0 && !isEmpty && viewTab !== "map" && (
           <div style={{ width: 200, flexShrink: 0 }}>
             <div style={{ position: "sticky", top: 20 }}>
-              <h3 style={{ fontFamily: "'Playfair Display',serif", fontSize: 16, color: PALETTE.text, margin: "0 0 10px" }}>locations</h3>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", margin: "0 0 10px" }}>
+                <h3 style={{ fontFamily: "'Playfair Display',serif", fontSize: 16, color: PALETTE.text, margin: 0 }}>locations</h3>
+                <button onClick={() => setShowAddCity(v => !v)} title="add a city" style={{ width: 24, height: 24, borderRadius: 7, border: `1.5px solid ${PALETTE.border}`, background: showAddCity ? PALETTE.accent : "transparent", color: showAddCity ? "#fff" : PALETTE.accent, fontSize: 16, lineHeight: 1, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'DM Sans',sans-serif" }}>+</button>
+              </div>
+              {showAddCity && (
+                <div style={{ marginBottom: 10 }}>
+                  <CitySearch onSelect={(city) => { handleAddLocation(city); setShowAddCity(false); }} />
+                </div>
+              )}
               <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                 {config.locations.map(loc => {
                   const isActive = activeLocs.includes(loc);
@@ -802,7 +870,7 @@ export default function App() {
           </div>
         )}
       </div>
-      {placeModal !== null && <PlaceModal place={placeModal.id ? placeModal : null} config={config} onSave={handleSavePlace} onClose={() => setPlaceModal(null)} onDelete={handleDeletePlace} onAddLocation={handleAddLocation} />}
+      {placeModal !== null && <PlaceModal place={placeModal.id ? placeModal : null} config={config} onSave={handleSavePlace} onClose={() => setPlaceModal(null)} onDelete={handleDeletePlace} onAddLocation={handleAddLocation} onAddDietary={handleAddDietary} />}
       {catModal && <CategoryModal category={catModal} places={places} onClose={() => setCatModal(null)} />}
       {surprise && (
         <div onClick={() => setSurprise(null)} style={{ position: "fixed", inset: 0, background: "rgba(44,37,32,.4)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1100, padding: 16 }}>
