@@ -109,7 +109,7 @@ function Chip({ label, onRemove, active, onClick, small }) {
   );
 }
 
-function MultiSelect({ options, selected, onChange, placeholder }) {
+function MultiSelect({ options, selected, onChange, placeholder, allowCustom, onAddNew }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const ref = useRef(null);
@@ -119,6 +119,14 @@ function MultiSelect({ options, selected, onChange, placeholder }) {
   }, []);
   const filtered = options.filter(o => o.toLowerCase().includes(search.toLowerCase()));
   const toggle = v => onChange(selected.includes(v) ? selected.filter(s => s !== v) : [...selected, v]);
+  const typed = search.trim().toLowerCase();
+  const canAddCustom = allowCustom && typed.length > 0 && !options.some(o => o.toLowerCase() === typed);
+  const addCustom = () => {
+    if (!typed) return;
+    onAddNew?.(typed);
+    if (!selected.includes(typed)) onChange([...selected, typed]);
+    setSearch("");
+  };
   return (
     <div ref={ref} style={{ position: "relative" }}>
       <div onClick={() => setOpen(!open)} style={{
@@ -132,15 +140,22 @@ function MultiSelect({ options, selected, onChange, placeholder }) {
       {open && (
         <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "#fff", border: `1.5px solid ${PALETTE.border}`, borderRadius: 10, marginTop: 4, maxHeight: 200, overflowY: "auto", zIndex: 999, boxShadow: "0 8px 24px rgba(44,37,32,.1)" }}>
           <div style={{ padding: "6px 8px", borderBottom: `1px solid ${PALETTE.border}` }}>
-            <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search..." autoFocus
+            <input type="text" value={search} onChange={e => setSearch(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter" && canAddCustom) { e.preventDefault(); addCustom(); } }}
+              placeholder={allowCustom ? "Search or type to add..." : "Search..."} autoFocus
               style={{ width: "100%", border: "none", outline: "none", fontSize: 13, fontFamily: "'DM Sans',sans-serif", color: PALETTE.text, background: "transparent" }} />
           </div>
+          {canAddCustom && (
+            <div onClick={addCustom} style={{ padding: "7px 12px", fontSize: 13, fontFamily: "'DM Sans',sans-serif", cursor: "pointer", color: PALETTE.accent, fontWeight: 600, borderBottom: `1px solid ${PALETTE.border}`, display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 15 }}>＋</span> add "{typed}"
+            </div>
+          )}
           {filtered.length > 0 ? filtered.map(o => (
             <div key={o} onClick={() => toggle(o)} style={{ padding: "7px 12px", fontSize: 13, fontFamily: "'DM Sans',sans-serif", cursor: "pointer", background: selected.includes(o) ? PALETTE.accentSoft : "transparent", color: PALETTE.text, display: "flex", alignItems: "center", gap: 8 }}>
               <span style={{ width: 16, height: 16, borderRadius: 4, border: `1.5px solid ${selected.includes(o) ? PALETTE.accent : PALETTE.border}`, background: selected.includes(o) ? PALETTE.accent : "transparent", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 11, flexShrink: 0 }}>{selected.includes(o) && "✓"}</span>
               {o}
             </div>
-          )) : <div style={{ padding: 12, fontSize: 13, color: PALETTE.textLight, textAlign: "center" }}>{options.length === 0 ? "None yet — add in Settings" : "No matches"}</div>}
+          )) : !canAddCustom && <div style={{ padding: 12, fontSize: 13, color: PALETTE.textLight, textAlign: "center" }}>{options.length === 0 ? "None yet — type to add or use Settings" : "No matches"}</div>}
         </div>
       )}
     </div>
@@ -441,7 +456,7 @@ function PlaceModal({ place, config, onSave, onClose, onDelete, onAddLocation })
           </div>
           <div>
             <label style={label}>Locations {config.locations.length === 0 && <span style={{ fontWeight: 400, textTransform: "none", color: PALETTE.textLight }}>(add in Settings)</span>}</label>
-            <MultiSelect options={config.locations} selected={form.locations} onChange={v => update("locations", v)} placeholder="Select locations..." />
+            <MultiSelect options={config.locations} selected={form.locations} onChange={v => update("locations", v)} placeholder="Select or type locations..." allowCustom onAddNew={loc => onAddLocation(loc)} />
           </div>
           <div><label style={label}>Website</label><input style={input} value={form.website} onChange={e => update("website", e.target.value)} placeholder="https://..." /></div>
           <div><label style={label}>Image URL</label><input style={input} value={form.imageUrl} onChange={e => update("imageUrl", e.target.value)} placeholder="Paste an image link..." /></div>
