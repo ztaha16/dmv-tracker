@@ -20,7 +20,25 @@ const PALETTE = {
 };
 
 const EMPTY_CONFIG = { categories: [], dietary: [], locations: [], costTiers: [] };
+
+// Password required to clear all places. Change "dmvtracker" to whatever you want.
+const DANGER_PASSWORD = "dmvtracker";
+
 function gid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+
+// Build a location label from a Nominatim address object.
+// DC neighborhoods -> "adams morgan - dc"; everything else -> city name.
+function placeLabelFromAddress(a) {
+  if (!a) return "";
+  const isDC = a.state === "District of Columbia" || a.state === "Washington, D.C." || (a.city || "").toLowerCase() === "washington";
+  if (isDC) {
+    const hood = a.neighbourhood || a.suburb || a.quarter || a.city_district || a.borough || a.residential;
+    if (hood) return `${hood.toLowerCase()} - dc`;
+    return "dc";
+  }
+  const city = a.city || a.town || a.village || a.hamlet || a.municipality || a.county || "";
+  return city.toLowerCase().replace(" county", "");
+}
 
 function distanceMiles(lat1, lng1, lat2, lng2) {
   const R = 3958.8;
@@ -168,7 +186,7 @@ function MultiSelect({ options, selected, onChange, placeholder, allowCustom, on
 }
 
 /* ── Address Search (Nominatim) ── */
-function AddressSearch({ value, onSelect }) {
+function AddressSearch({ value, onSelect, onNotFound, onTyping }) {
   const [query, setQuery] = useState(value || "");
   const [results, setResults] = useState([]);
   const [open, setOpen] = useState(false);
@@ -200,16 +218,19 @@ function AddressSearch({ value, onSelect }) {
       const data = await res.json();
       if (data && data[0]) {
         const r = data[0]; const a = r.address || {};
-        const town = (a.city || a.town || a.village || a.suburb || a.hamlet || a.municipality || a.county || "").toLowerCase().replace(" county", "");
+        const town = placeLabelFromAddress(a);
         onSelect({ lat: parseFloat(r.lat), lng: parseFloat(r.lon), address: r.display_name, town });
         setQuery(r.display_name); setOpen(false);
+      } else {
+        onNotFound?.(q);
+        setOpen(false);
       }
-    } catch { /* ignore */ }
+    } catch { onNotFound?.(q); }
   };
   return (
     <div ref={ref} style={{ position: "relative" }}>
       <input type="text" value={query}
-        onChange={e => { setQuery(e.target.value); doSearch(e.target.value); }}
+        onChange={e => { setQuery(e.target.value); onTyping?.(); doSearch(e.target.value); }}
         onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); geocodeAndSelect(); } }}
         placeholder="Type an address & press Enter, or pick below..."
         style={{ width: "100%", border: `1.5px solid ${PALETTE.border}`, borderRadius: 10, padding: "9px 12px", fontSize: 14, fontFamily: "'DM Sans',sans-serif", color: PALETTE.text, outline: "none", background: "#fff", boxSizing: "border-box" }} />
@@ -219,7 +240,7 @@ function AddressSearch({ value, onSelect }) {
           {results.map((r, i) => (
             <div key={i} onClick={() => {
               const a = r.address || {};
-              const town = (a.city || a.town || a.village || a.suburb || a.hamlet || a.municipality || a.county || "").toLowerCase().replace(" county", "");
+              const town = placeLabelFromAddress(a);
               onSelect({ lat: parseFloat(r.lat), lng: parseFloat(r.lon), address: r.display_name, town });
               setQuery(r.display_name); setOpen(false);
             }} style={{ padding: "8px 12px", fontSize: 12, fontFamily: "'DM Sans',sans-serif", cursor: "pointer", color: PALETTE.text, borderBottom: `1px solid ${PALETTE.border}`, lineHeight: 1.4 }}
@@ -258,9 +279,9 @@ function CitySearch({ onSelect }) {
         const cities = [];
         data.forEach(r => {
           const a = r.address || {};
-          const name = (a.city || a.town || a.village || a.hamlet || a.municipality || "").toLowerCase();
+          const name = placeLabelFromAddress(a);
           const state = a.state || "";
-          if (name && !seen.has(name)) { seen.add(name); cities.push({ name, label: `${name}${state ? ", " + state : ""}` }); }
+          if (name && !seen.has(name)) { seen.add(name); cities.push({ name, label: name.includes(" - dc") ? name : `${name}${state ? ", " + state : ""}` }); }
         });
         setResults(cities); setOpen(true);
       } catch { setResults([]); }
@@ -439,6 +460,7 @@ function LocationManager({ items, onUpdate }) {
 function PlaceModal({ place, config, onSave, onClose, onDelete, onAddLocation, onAddDietary }) {
   const isEdit = !!place?.id;
   const [form, setForm] = useState(place || { name: "", categories: [], dietary: [], cost: "", locations: [], website: "", imageUrl: "", rating: 0, visited: false, notes: "", lat: null, lng: null, address: "" });
+  const [notFound, setNotFound] = useState("");
   const update = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const label = { fontSize: 12, fontWeight: 600, color: PALETTE.textMid, marginBottom: 5, display: "block", fontFamily: "'DM Sans',sans-serif", textTransform: "uppercase", letterSpacing: ".5px" };
   const input = { width: "100%", border: `1.5px solid ${PALETTE.border}`, borderRadius: 10, padding: "9px 12px", fontSize: 14, fontFamily: "'DM Sans',sans-serif", color: PALETTE.text, outline: "none", background: "#fff", boxSizing: "border-box" };
@@ -453,10 +475,20 @@ function PlaceModal({ place, config, onSave, onClose, onDelete, onAddLocation, o
           <div><label style={label}>Name *</label><input style={input} value={form.name} onChange={e => update("name", e.target.value)} placeholder="e.g. Dave's Hot Chicken" /></div>
           <div>
             <label style={label}>Find on map {form.lat && <span style={{ fontWeight: 400, textTransform: "none", color: PALETTE.visited }}>✓ pinned</span>}</label>
-            <AddressSearch value={form.address} onSelect={({ lat, lng, address, town }) => {
-              if (town) onAddLocation(town);
-              setForm(f => ({ ...f, lat, lng, address, locations: town && !f.locations.includes(town) ? [...f.locations, town] : f.locations }));
-            }} />
+            <AddressSearch value={form.address}
+              onSelect={({ lat, lng, address, town }) => {
+                setNotFound("");
+                if (town) onAddLocation(town);
+                setForm(f => ({ ...f, lat, lng, address, locations: town && !f.locations.includes(town) ? [...f.locations, town] : f.locations }));
+              }}
+              onTyping={() => notFound && setNotFound("")}
+              onNotFound={(typed) => { setNotFound(typed); setForm(f => ({ ...f, address: typed, lat: null, lng: null })); }}
+            />
+            {notFound && (
+              <div style={{ marginTop: 6, fontSize: 12, color: PALETTE.textMid, background: PALETTE.dangerBg, borderRadius: 8, padding: "8px 10px", lineHeight: 1.4 }}>
+                ⚠️ Couldn't find that on the map, so it won't have a pin. You can still save the place, it just won't show on the map view.
+              </div>
+            )}
           </div>
           <div>
             <label style={label}>Categories {config.categories.length === 0 && <span style={{ fontWeight: 400, textTransform: "none", color: PALETTE.textLight }}>(add in Settings)</span>}</label>
@@ -739,7 +771,12 @@ export default function App() {
             {places.length > 0 && (
               <div style={{ background: PALETTE.dangerBg, borderRadius: 14, padding: 20 }}>
                 <h3 style={{ fontFamily: "'Playfair Display',serif", fontSize: 18, color: PALETTE.danger, margin: "0 0 12px" }}>⚠️ Danger Zone</h3>
-                <button onClick={() => { if (confirm("Delete ALL places?")) handleClearAll(); }}
+                <button onClick={() => {
+                  const pw = prompt("Enter the password to clear all places:");
+                  if (pw === null) return;
+                  if (pw !== DANGER_PASSWORD) { alert("Wrong password. Nothing was deleted."); return; }
+                  if (confirm("Last chance — permanently delete ALL places?")) handleClearAll();
+                }}
                   style={{ padding: "10px 18px", borderRadius: 10, border: `1.5px solid ${PALETTE.danger}`, background: "transparent", color: PALETTE.danger, fontFamily: "'DM Sans',sans-serif", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Clear All Places</button>
               </div>
             )}
