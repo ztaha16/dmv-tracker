@@ -16,10 +16,11 @@ const PALETTE = {
   star: "#F0C8A0", starEmpty: "#FFE0F0", visited: "#BCE0FF", costBg: "#FFD0E4",
   danger: "#E890A8", dangerBg: "#FFF0F4",
   pinVisited: "#7FBFE0", pinWishlist: "#D4829A",
-  dietTag: "#E1F5EE", dietTagText: "#0F6E56"
+  dietTag: "#E1F5EE", dietTagText: "#0F6E56",
+  vibeTag: "#E2ECFB", vibeTagText: "#2E5E9E"
 };
 
-const EMPTY_CONFIG = { categories: [], dietary: [], locations: [], costTiers: [] };
+const EMPTY_CONFIG = { categories: [], dietary: [], vibes: [], locations: [], costTiers: [] };
 
 // Password required to clear all places. Change "dmvtracker" to whatever you want.
 const DANGER_PASSWORD = "dmvtracker";
@@ -66,7 +67,8 @@ async function dbLoadPlaces() {
     id: r.id, name: r.name, categories: r.categories || [], cost: r.cost || "",
     locations: r.locations || [], website: r.website || "", imageUrl: r.image_url || "",
     rating: r.rating || 0, visited: r.visited || false, notes: r.notes || "",
-    dietary: r.dietary || [],
+    dietary: r.dietary || [], vibes: r.vibes || [],
+    branches: r.branches || [],
     lat: r.lat ?? null, lng: r.lng ?? null, address: r.address || ""
   }));
 }
@@ -82,7 +84,8 @@ async function dbUpsertPlace(place) {
     id: place.id, name: place.name, categories: place.categories, cost: place.cost,
     locations: place.locations, website: place.website, image_url: place.imageUrl,
     rating: place.rating, visited: place.visited, notes: place.notes,
-    dietary: place.dietary || [],
+    dietary: place.dietary || [], vibes: place.vibes || [],
+    branches: place.branches || [],
     lat: place.lat, lng: place.lng, address: place.address
   };
   const { error } = await supabase.from("places").upsert(row);
@@ -113,9 +116,9 @@ function StarRating({ rating, onRate, size = 18, interactive = false }) {
   );
 }
 
-function Chip({ label, onRemove, active, onClick, small, green }) {
-  const bg = active ? (green ? PALETTE.dietTagText : PALETTE.accent) : (green ? PALETTE.dietTag : PALETTE.tag);
-  const fg = active ? "#fff" : (green ? PALETTE.dietTagText : PALETTE.tagText);
+function Chip({ label, onRemove, active, onClick, small, green, blue }) {
+  const bg = active ? (green ? PALETTE.dietTagText : blue ? PALETTE.vibeTagText : PALETTE.accent) : (green ? PALETTE.dietTag : blue ? PALETTE.vibeTag : PALETTE.tag);
+  const fg = active ? "#fff" : (green ? PALETTE.dietTagText : blue ? PALETTE.vibeTagText : PALETTE.tagText);
   return (
     <span onClick={onClick} style={{
       background: bg,
@@ -132,7 +135,7 @@ function Chip({ label, onRemove, active, onClick, small, green }) {
   );
 }
 
-function MultiSelect({ options, selected, onChange, placeholder, allowCustom, onAddNew, green }) {
+function MultiSelect({ options, selected, onChange, placeholder, allowCustom, onAddNew, green, blue }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const ref = useRef(null);
@@ -158,7 +161,7 @@ function MultiSelect({ options, selected, onChange, placeholder, allowCustom, on
         background: "#fff", alignItems: "center"
       }}>
         {selected.length === 0 && <span style={{ color: PALETTE.textLight, fontSize: 13 }}>{placeholder}</span>}
-        {selected.map(s => <Chip key={s} label={s} small green={green} onRemove={() => toggle(s)} />)}
+        {selected.map(s => <Chip key={s} label={s} small green={green} blue={blue} onRemove={() => toggle(s)} />)}
       </div>
       {open && (
         <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "#fff", border: `1.5px solid ${PALETTE.border}`, borderRadius: 10, marginTop: 4, maxHeight: 200, overflowY: "auto", zIndex: 999, boxShadow: "0 8px 24px rgba(44,37,32,.1)" }}>
@@ -457,10 +460,11 @@ function LocationManager({ items, onUpdate }) {
 }
 
 /* ── Place Modal ── */
-function PlaceModal({ place, config, onSave, onClose, onDelete, onAddLocation, onAddDietary }) {
+function PlaceModal({ place, config, onSave, onClose, onDelete, onAddLocation, onAddDietary, onAddVibe }) {
   const isEdit = !!place?.id;
-  const [form, setForm] = useState(place || { name: "", categories: [], dietary: [], cost: "", locations: [], website: "", imageUrl: "", rating: 0, visited: false, notes: "", lat: null, lng: null, address: "" });
+  const [form, setForm] = useState(place || { name: "", categories: [], dietary: [], vibes: [], cost: "", locations: [], website: "", imageUrl: "", rating: 0, visited: false, notes: "", branches: [], lat: null, lng: null, address: "" });
   const [notFound, setNotFound] = useState("");
+  const [branchNotFound, setBranchNotFound] = useState("");
   const update = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const label = { fontSize: 12, fontWeight: 600, color: PALETTE.textMid, marginBottom: 5, display: "block", fontFamily: "'DM Sans',sans-serif", textTransform: "uppercase", letterSpacing: ".5px" };
   const input = { width: "100%", border: `1.5px solid ${PALETTE.border}`, borderRadius: 10, padding: "9px 12px", fontSize: 14, fontFamily: "'DM Sans',sans-serif", color: PALETTE.text, outline: "none", background: "#fff", boxSizing: "border-box" };
@@ -474,19 +478,36 @@ function PlaceModal({ place, config, onSave, onClose, onDelete, onAddLocation, o
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <div><label style={label}>Name *</label><input style={input} value={form.name} onChange={e => update("name", e.target.value)} placeholder="e.g. Dave's Hot Chicken" /></div>
           <div>
-            <label style={label}>Find on map {form.lat && <span style={{ fontWeight: 400, textTransform: "none", color: PALETTE.visited }}>✓ pinned</span>}</label>
-            <AddressSearch value={form.address}
+            <label style={label}>Locations on map {form.branches?.length > 0 && <span style={{ fontWeight: 400, textTransform: "none", color: PALETTE.visited }}>✓ {form.branches.length} pinned</span>}</label>
+            {form.branches?.length > 0 && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 8 }}>
+                {form.branches.map((b, i) => (
+                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, background: PALETTE.card, border: `1px solid ${PALETTE.border}`, borderRadius: 8, padding: "6px 10px" }}>
+                    <span style={{ fontSize: 12, color: PALETTE.text, fontFamily: "'DM Sans',sans-serif", flex: 1, lineHeight: 1.3 }}>📍 {b.address}</span>
+                    <button onClick={() => setForm(f => ({ ...f, branches: f.branches.filter((_, idx) => idx !== i) }))}
+                      style={{ background: "transparent", border: "none", cursor: "pointer", fontSize: 14, color: PALETTE.danger, flexShrink: 0 }}>×</button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <AddressSearch value=""
               onSelect={({ lat, lng, address, town }) => {
-                setNotFound("");
+                setBranchNotFound("");
                 if (town) onAddLocation(town);
-                setForm(f => ({ ...f, lat, lng, address, locations: town && !f.locations.includes(town) ? [...f.locations, town] : f.locations }));
+                setForm(f => ({
+                  ...f,
+                  branches: [...(f.branches || []), { address, lat, lng }],
+                  locations: town && !f.locations.includes(town) ? [...f.locations, town] : f.locations,
+                  lat: f.lat ?? lat, lng: f.lng ?? lng, address: f.address || address
+                }));
               }}
-              onTyping={() => notFound && setNotFound("")}
-              onNotFound={(typed) => { setNotFound(typed); setForm(f => ({ ...f, address: typed, lat: null, lng: null })); }}
+              onTyping={() => branchNotFound && setBranchNotFound("")}
+              onNotFound={(typed) => setBranchNotFound(typed)}
             />
-            {notFound && (
+            <div style={{ fontSize: 11, color: PALETTE.textLight, marginTop: 4, fontFamily: "'DM Sans',sans-serif" }}>Add each branch/location — search and pick, they stack up above.</div>
+            {branchNotFound && (
               <div style={{ marginTop: 6, fontSize: 12, color: PALETTE.textMid, background: PALETTE.dangerBg, borderRadius: 8, padding: "8px 10px", lineHeight: 1.4 }}>
-                ⚠️ Couldn't find that on the map, so it won't have a pin. You can still save the place, it just won't show on the map view.
+                ⚠️ Couldn't find "{branchNotFound}" on the map. Try a fuller address, or just skip the pin — the place still saves.
               </div>
             )}
           </div>
@@ -497,6 +518,10 @@ function PlaceModal({ place, config, onSave, onClose, onDelete, onAddLocation, o
           <div>
             <label style={label}>Dietary {config.dietary.length === 0 && <span style={{ fontWeight: 400, textTransform: "none", color: PALETTE.textLight }}>(halal, vegan, etc — add in Settings)</span>}</label>
             <MultiSelect options={config.dietary} selected={form.dietary || []} onChange={v => update("dietary", v)} placeholder="Select dietary tags..." green allowCustom onAddNew={d => onAddDietary(d)} />
+          </div>
+          <div>
+            <label style={label}>Vibes {config.vibes.length === 0 && <span style={{ fontWeight: 400, textTransform: "none", color: PALETTE.textLight }}>(cozy, aesthetic, etc — add in Settings)</span>}</label>
+            <MultiSelect options={config.vibes} selected={form.vibes || []} onChange={v => update("vibes", v)} placeholder="Select vibes..." blue allowCustom onAddNew={v => onAddVibe(v)} />
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <div>
@@ -566,6 +591,11 @@ function PlaceCard({ place, onClick, distance }) {
             {place.dietary.map(d => <Chip key={d} label={d} small green />)}
           </div>
         )}
+        {place.vibes?.length > 0 && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 6 }}>
+            {place.vibes.map(v => <Chip key={v} label={v} small blue />)}
+          </div>
+        )}
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           {place.cost && <span style={{ background: PALETTE.costBg, padding: "2px 8px", borderRadius: 5, fontSize: 11, fontFamily: "'DM Sans',sans-serif", color: PALETTE.textMid, fontWeight: 500 }}>{place.cost}</span>}
           {place.rating > 0 && <StarRating rating={place.rating} size={12} />}
@@ -588,14 +618,23 @@ function PlaceCard({ place, onClick, distance }) {
 
 /* ── Map View ── */
 function MapView({ places, onClick, userLoc }) {
-  const pinned = places.filter(p => p.lat && p.lng);
-  const center = userLoc ? [userLoc.lat, userLoc.lng] : pinned.length > 0 ? [pinned[0].lat, pinned[0].lng] : [38.8816, -77.0910];
+  // Expand each place into one marker per branch (or its single pin as fallback)
+  const markers = [];
+  places.forEach(p => {
+    const branches = (p.branches && p.branches.length > 0)
+      ? p.branches
+      : (p.lat && p.lng ? [{ lat: p.lat, lng: p.lng, address: p.address }] : []);
+    branches.forEach((b, i) => {
+      if (b.lat && b.lng) markers.push({ place: p, branch: b, key: `${p.id}-${i}` });
+    });
+  });
+  const center = userLoc ? [userLoc.lat, userLoc.lng] : markers.length > 0 ? [markers[0].branch.lat, markers[0].branch.lng] : [38.8816, -77.0910];
   return (
     <div style={{ borderRadius: 14, overflow: "hidden", border: `1px solid ${PALETTE.border}`, height: 560 }}>
-      {pinned.length === 0 ? (
+      {markers.length === 0 ? (
         <div style={{ height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: PALETTE.accentSoft, color: PALETTE.textMid }}>
           <div style={{ fontSize: 40, marginBottom: 8 }}>🗺️</div>
-          <div style={{ fontSize: 14, fontFamily: "'DM Sans',sans-serif" }}>No pinned places yet. Use "Find on map" when adding a place!</div>
+          <div style={{ fontSize: 14, fontFamily: "'DM Sans',sans-serif" }}>No pinned places yet. Add a location on the map when adding a place!</div>
         </div>
       ) : (
         <MapContainer center={center} zoom={11} style={{ height: "100%", width: "100%" }}>
@@ -605,8 +644,8 @@ function MapView({ places, onClick, userLoc }) {
               <Popup>You are here</Popup>
             </Marker>
           )}
-          {pinned.map(p => (
-            <Marker key={p.id} position={[p.lat, p.lng]} icon={p.visited ? pinVisitedIcon : pinWishlistIcon}
+          {markers.map(({ place: p, branch: b, key }) => (
+            <Marker key={key} position={[b.lat, b.lng]} icon={p.visited ? pinVisitedIcon : pinWishlistIcon}
               eventHandlers={{
                 mouseover: (e) => e.target.openPopup(),
                 mouseout: (e) => e.target.closePopup()
@@ -615,8 +654,10 @@ function MapView({ places, onClick, userLoc }) {
                 <div style={{ fontFamily: "'DM Sans',sans-serif", minWidth: 150 }}>
                   {p.imageUrl && <div style={{ width: "100%", height: 90, borderRadius: 8, marginBottom: 6, background: `url(${p.imageUrl}) center/cover`, backgroundColor: PALETTE.accentSoft }} />}
                   <div style={{ fontWeight: 700, fontSize: 14, color: PALETTE.text, marginBottom: 4 }}>{p.name}</div>
+                  {b.address && <div style={{ fontSize: 10, color: PALETTE.textLight, marginBottom: 4, lineHeight: 1.3 }}>{b.address}</div>}
                   {p.categories?.length > 0 && <div style={{ fontSize: 11, color: PALETTE.tagText, marginBottom: 2 }}>{p.categories.join(", ")}</div>}
-                  {p.dietary?.length > 0 && <div style={{ fontSize: 11, color: PALETTE.dietTagText, marginBottom: 4 }}>{p.dietary.join(", ")}</div>}
+                  {p.dietary?.length > 0 && <div style={{ fontSize: 11, color: PALETTE.dietTagText, marginBottom: 2 }}>{p.dietary.join(", ")}</div>}
+                  {p.vibes?.length > 0 && <div style={{ fontSize: 11, color: PALETTE.vibeTagText, marginBottom: 4 }}>{p.vibes.join(", ")}</div>}
                   {p.rating > 0 && <div style={{ color: PALETTE.star, fontSize: 13 }}>{"★".repeat(p.rating)}</div>}
                   {p.cost && <div style={{ fontSize: 12, color: PALETTE.textMid, marginTop: 2 }}>{p.cost}</div>}
                   <div style={{ fontSize: 11, color: p.visited ? PALETTE.pinVisited : PALETTE.pinWishlist, marginTop: 2, fontWeight: 600 }}>{p.visited ? "✓ visited" : "want to visit"}</div>
@@ -637,6 +678,7 @@ export default function App() {
   const [viewTab, setViewTab] = useState("overview");
   const [activeCats, setActiveCats] = useState([]);
   const [activeDiet, setActiveDiet] = useState([]);
+  const [activeVibes, setActiveVibes] = useState([]);
   const [activeLocs, setActiveLocs] = useState([]);
   const [showAddCity, setShowAddCity] = useState(false);
   const [search, setSearch] = useState("");
@@ -683,6 +725,15 @@ export default function App() {
       return { ...prev, dietary: updated };
     });
   };
+  const handleAddVibe = async (v) => {
+    if (!v) return;
+    setConfig(prev => {
+      if (prev.vibes.includes(v)) return prev;
+      const updated = [...prev.vibes, v].sort();
+      dbSaveConfig("vibes", updated);
+      return { ...prev, vibes: updated };
+    });
+  };
 
   const requestLocation = () => {
     if (!navigator.geolocation) { setLocStatus("Location not supported on this device"); return; }
@@ -701,15 +752,23 @@ export default function App() {
 
   const toggleCat = c => setActiveCats(prev => prev.includes(c) ? prev.filter(x => x !== c) : [...prev, c]);
   const toggleDiet = d => setActiveDiet(prev => prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d]);
+  const toggleVibe = v => setActiveVibes(prev => prev.includes(v) ? prev.filter(x => x !== v) : [...prev, v]);
   const toggleLoc = l => setActiveLocs(prev => prev.includes(l) ? prev.filter(x => x !== l) : [...prev, l]);
 
-  const withDistance = (p) => (nearMe && userLoc && p.lat && p.lng)
-    ? distanceMiles(userLoc.lat, userLoc.lng, p.lat, p.lng) : undefined;
+  const withDistance = (p) => {
+    if (!nearMe || !userLoc) return undefined;
+    const pts = (p.branches && p.branches.length > 0)
+      ? p.branches.filter(b => b.lat && b.lng)
+      : (p.lat && p.lng ? [{ lat: p.lat, lng: p.lng }] : []);
+    if (pts.length === 0) return undefined;
+    return Math.min(...pts.map(b => distanceMiles(userLoc.lat, userLoc.lng, b.lat, b.lng)));
+  };
 
   let filtered = places
     .filter(p => {
       if (activeCats.length > 0 && !activeCats.some(c => p.categories?.includes(c))) return false;
       if (activeDiet.length > 0 && !activeDiet.every(d => p.dietary?.includes(d))) return false;
+      if (activeVibes.length > 0 && !activeVibes.some(v => p.vibes?.includes(v))) return false;
       if (activeLocs.length > 0 && !activeLocs.some(l => p.locations?.includes(l))) return false;
       if (viewTab === "want to visit" && p.visited) return false;
       if (viewTab === "view by rating" && !p.rating) return false;
@@ -766,6 +825,7 @@ export default function App() {
           <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
             <ListManager title="Categories" icon="📂" items={config.categories} onUpdate={cats => handleConfigUpdate("categories", cats, { ...config, categories: cats })} />
             <ListManager title="Dietary" icon="🥗" items={config.dietary} onUpdate={d => handleConfigUpdate("dietary", d, { ...config, dietary: d })} />
+            <ListManager title="Vibes" icon="✨" items={config.vibes} onUpdate={v => handleConfigUpdate("vibes", v, { ...config, vibes: v })} />
             <LocationManager items={config.locations} onUpdate={locs => handleConfigUpdate("locations", locs, { ...config, locations: locs })} />
             <ListManager title="Cost Tiers" icon="💰" items={config.costTiers} onUpdate={tiers => handleConfigUpdate("costTiers", tiers, { ...config, costTiers: tiers })} />
             {places.length > 0 && (
@@ -822,6 +882,17 @@ export default function App() {
             </div>
           </div>
         )}
+        {config.vibes.length > 0 && (
+          <div style={{ marginTop: 14 }}>
+            <div style={{ fontSize: 12, color: PALETTE.textLight, marginBottom: 6, textTransform: "uppercase", letterSpacing: ".5px", fontWeight: 600 }}>vibes</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+              {config.vibes.map(v => (
+                <Chip key={v} label={v} blue active={activeVibes.includes(v)} onClick={() => toggleVibe(v)} />
+              ))}
+              {activeVibes.length > 0 && <span onClick={() => setActiveVibes([])} style={{ fontSize: 12, color: PALETTE.danger, cursor: "pointer", fontFamily: "'DM Sans',sans-serif" }}>clear</span>}
+            </div>
+          </div>
+        )}
       </div>
       <div style={{ maxWidth: 1400, margin: "0 auto", padding: "16px 28px 40px", display: "flex", gap: 24 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -854,11 +925,12 @@ export default function App() {
                 {locStatus && <div style={{ fontSize: 12, color: PALETTE.textMid, marginTop: 8 }}>{locStatus}</div>}
                 {nearMe && !locStatus && <div style={{ fontSize: 12, color: PALETTE.accent, marginTop: 8, fontWeight: 600 }}>showing places nearest to you · pinned places only have distances</div>}
               </div>
-              {(activeCats.length > 0 || activeDiet.length > 0 || activeLocs.length > 0) && viewTab !== "map" && (
+              {(activeCats.length > 0 || activeDiet.length > 0 || activeVibes.length > 0 || activeLocs.length > 0) && viewTab !== "map" && (
                 <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
                   <span style={{ fontSize: 12, color: PALETTE.textLight }}>Filtering:</span>
                   {activeCats.map(c => <Chip key={c} label={c} small active onRemove={() => toggleCat(c)} />)}
                   {activeDiet.map(d => <Chip key={d} label={d} small green active onRemove={() => toggleDiet(d)} />)}
+                  {activeVibes.map(v => <Chip key={v} label={v} small blue active onRemove={() => toggleVibe(v)} />)}
                   {activeLocs.map(l => <Chip key={l} label={`📍 ${l}`} small active onRemove={() => toggleLoc(l)} />)}
                 </div>
               )}
@@ -907,7 +979,7 @@ export default function App() {
           </div>
         )}
       </div>
-      {placeModal !== null && <PlaceModal place={placeModal.id ? placeModal : null} config={config} onSave={handleSavePlace} onClose={() => setPlaceModal(null)} onDelete={handleDeletePlace} onAddLocation={handleAddLocation} onAddDietary={handleAddDietary} />}
+      {placeModal !== null && <PlaceModal place={placeModal.id ? placeModal : null} config={config} onSave={handleSavePlace} onClose={() => setPlaceModal(null)} onDelete={handleDeletePlace} onAddLocation={handleAddLocation} onAddDietary={handleAddDietary} onAddVibe={handleAddVibe} />}
       {catModal && <CategoryModal category={catModal} places={places} onClose={() => setCatModal(null)} />}
       {surprise && (
         <div onClick={() => setSurprise(null)} style={{ position: "fixed", inset: 0, background: "rgba(44,37,32,.4)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1100, padding: 16 }}>
